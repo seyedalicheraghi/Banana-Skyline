@@ -1,0 +1,22 @@
+{
+  "name": "banana-skyline",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Two monkeys, a windy skyline, and bananas. Plays in a desktop browser and in VR on Meta Quest (WebXR).",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "check": "node scripts/check.mjs",
+    "quest": "node scripts/quest.mjs"
+  },
+  "dependencies": {
+    "three": "0.186.1"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "iwer": "2.5.0"
+  }
+}
