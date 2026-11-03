@@ -5,7 +5,8 @@ take turns throwing a banana over the city, mind the wind and the buildings, and
 Bananas blow holes in buildings, monkeys fall when their roof is gone, and the moon does not like
 being hit.
 
-Plays in a desktop browser and in VR on Meta Quest (WebXR, through Quest Browser over USB).
+Plays in a desktop browser and in VR on Meta Quest: as an app in the Quest library, or in Quest Browser
+served from this PC over USB. Play it in any browser at <https://seyedalicheraghi.github.io/Banana-Skyline/>.
 
 ## Play on this PC
 
@@ -70,12 +71,69 @@ Controls in VR:
 Try VR mode without a headset: open <http://localhost:8080/?emulate> (uses Meta's WebXR emulator, a dev
 dependency).
 
+## The Quest app
+
+**Banana Skyline** is installed on the headset as an app: Library → **Unknown Sources** → Banana Skyline.
+It runs without this PC. The app is a small Android package made with Meta's
+[Bubblewrap](https://developers.meta.com/horizon/documentation/web/pwa-packaging/) that opens the game
+published on GitHub Pages full screen. It needs Wi-Fi the first time. After that it starts offline,
+because a service worker keeps every file of the game on the headset.
+
+### Update the game
+
+```bash
+npm run deploy
+```
+
+This builds `dist/` and pushes it to the `gh-pages` branch of the GitHub repository, which GitHub Pages
+serves at the address above. Nothing has to be reinstalled. The app downloads the new version in the
+background the next time it starts, and shows it from the launch after that.
+
+Before publishing, you can try the build:
+
+- `npm run preview` serves `dist/` at <http://localhost:8081>. It uses port 8081 so the build's service
+  worker never caches the source tree on 8080.
+- `npm run quest -- --dist` opens the same build in Quest Browser over USB, with `[headset]` logs.
+
+### Rebuild and reinstall the app
+
+Only needed when the address, name, icon or signing key change, or for another headset. Connect the
+headset as in "Play on Meta Quest" and run:
+
+```bash
+npm run apk
+```
+
+This regenerates the Android project in `quest-app/` from `quest-app/twa-manifest.json`, then builds and
+signs `quest-app/app-release-signed.apk`. It installs the APK with adb and starts the app.
+
+One-time setup on a new PC:
+
+1. `npm install -g @meta-quest/bubblewrap-cli@1.24.1`
+2. `bubblewrap doctor`: let it install JDK 17 and the Android SDK (into `~/.bubblewrap`). The first
+   `npm run apk` also asks you to accept the Android SDK license for its build tools.
+3. The signing key: the first `npm run apk` creates `quest-app/android.keystore` and its passwords in
+   `quest-app/signing.json`. Git ignores both files. **Back them up.** An app signed with a different key
+   cannot replace the installed one: you would have to run `adb uninstall io.github.seyedalicheraghi.bananaskyline`
+   first, which also clears the game's settings.
+
+**Browser bar.** Android only trusts the app to show the site without a browser bar if the site's origin
+says so: `https://seyedalicheraghi.github.io/.well-known/assetlinks.json` must contain
+`quest-app/assetlinks.json`, which `npm run apk` writes. That address belongs to the user site repository
+`seyedalicheraghi.github.io`, not this one. Until the file is there, the app works, but shows a small browser
+bar at the top. `npm run apk` reports which case you are in.
+
 ## For developers
 
 - `docs/DESIGN.md`: architecture, coordinates, and the contracts between modules.
 - `npm test`: unit tests for the game logic, prefs and server (`node --test`).
 - `npm run check`: parses every module, loads them in Node, and verifies every import resolves.
-- No build step and no network assets: the browser loads `src/` as ES modules; three.js comes from
-  `node_modules` through the import map in `index.html`. Everything you see and hear is generated in code.
+- No build step for development and no network assets: the browser loads `src/` as ES modules; three.js
+  comes from `node_modules` through the import map in `index.html`. Everything you see and hear is
+  generated in code, the app icon included (`scripts/icons.mjs`).
+- `npm run build` only assembles `dist/` for publishing (`scripts/build.mjs`). It copies `src/` as it is,
+  plus the three.js files the game imports (under `lib/`), and rewrites the import map. It adds
+  `manifest.webmanifest`, the icons, and `sw.js`, the offline cache made from `scripts/sw.js`.
+  `?emulate` is not part of the build.
 - This project uses the [LeanLoop](https://github.com/seyedalicheraghi/LeanLoop) Claude Code plugin:
   `leanloop.json` records the checks (`unit`, `static`) that must pass before a task counts as done.

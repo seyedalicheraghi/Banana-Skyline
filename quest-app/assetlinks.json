@@ -1,0 +1,14 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "io.github.seyedalicheraghi.bananaskyline",
+      "sha256_cert_fingerprints": [
+        "45:92:9E:9B:EE:C7:F2:FB:E8:E9:4B:67:BB:2B:88:BE:43:64:DD:C4:56:82:4A:68:03:6D:C7:C2:98:91:C5:C7"
+      ]
+    }
+  }
+]

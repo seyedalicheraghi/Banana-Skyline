@@ -1,16 +1,20 @@
 #!/usr/bin/env node
 // Zero-dependency static server for the game. Binds to 127.0.0.1 only; the Quest reaches it via `adb reverse`.
+// `--dist` serves the build (npm run build) instead of the source tree, on port 8081 by default: a separate
+// origin, so the build's service worker never caches pages of the source tree on 8080.
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const ROOT = path.dirname(fileURLToPath(import.meta.url));
-const PORT = Number(process.env.PORT) || 8080;
+const DIST = process.argv.includes('--dist');
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const ROOT = DIST ? path.resolve(HERE, process.env.DIST_DIR || 'dist') : HERE;
+const PORT = Number(process.env.PORT) || (DIST ? 8081 : 8080);
 const HOST = process.env.HOST || '127.0.0.1';
 
-// Only these trees are served.
-const ALLOWED = ['index.html', 'manifest.webmanifest', 'src/', 'assets/', 'node_modules/three/build/', 'node_modules/three/examples/jsm/',
+// Only these trees are served (a build holds nothing else, so all of it is).
+const ALLOWED = DIST ? null : ['index.html', 'manifest.webmanifest', 'src/', 'assets/', 'node_modules/three/build/', 'node_modules/three/examples/jsm/',
   'node_modules/iwer/build/']; // dev-only Quest emulator, loaded only with ?emulate
 
 const TYPES = {
@@ -40,7 +44,7 @@ function resolve(urlPath) {
   const full = path.resolve(ROOT, rel);
   if (full !== ROOT && !full.startsWith(ROOT + path.sep)) return null;
   const posix = path.relative(ROOT, full).split(path.sep).join('/');
-  if (!ALLOWED.some(a => (a.endsWith('/') ? posix.startsWith(a) : posix === a))) return null;
+  if (ALLOWED && !ALLOWED.some(a => (a.endsWith('/') ? posix.startsWith(a) : posix === a))) return null;
   return full;
 }
 
@@ -107,8 +111,13 @@ const server = http.createServer((req, res) => {
   });
 });
 
+if (DIST && !fs.existsSync(path.join(ROOT, 'index.html'))) {
+  console.error(`No build in ${ROOT}: run npm run build first.`);
+  process.exit(1);
+}
+
 server.listen(PORT, HOST, () => {
-  console.log(`Banana Skyline: http://localhost:${PORT}/`);
+  console.log(`Banana Skyline${DIST ? ' (build)' : ''}: http://localhost:${PORT}/`);
 });
 
 export default server;

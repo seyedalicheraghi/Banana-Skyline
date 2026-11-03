@@ -1,0 +1,6 @@
+# Bubblewrap regenerates everything here from twa-manifest.json (npm run apk). The signing key
+# (android.keystore) and its passwords (signing.json) are private: back them up, never commit them.
+*
+!.gitignore
+!twa-manifest.json
+!assetlinks.json

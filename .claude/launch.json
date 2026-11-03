@@ -6,6 +6,12 @@
       "runtimeExecutable": "node",
       "runtimeArgs": ["server.mjs"],
       "port": 8080
+    },
+    {
+      "name": "banana-skyline-dist",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["server.mjs", "--dist"],
+      "port": 8081
     }
   ]
 }

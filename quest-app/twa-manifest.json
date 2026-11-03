@@ -1,0 +1,60 @@
+{
+  "packageId": "io.github.seyedalicheraghi.bananaskyline",
+  "applicationId": "0",
+  "host": "seyedalicheraghi.github.io",
+  "name": "Banana Skyline",
+  "launcherName": "Banana Skyline",
+  "display": "standalone",
+  "themeColor": "#0B1026",
+  "themeColorDark": "#000000",
+  "navigationColor": "#000000",
+  "navigationColorDark": "#000000",
+  "navigationDividerColor": "#000000",
+  "navigationDividerColorDark": "#000000",
+  "backgroundColor": "#0B1026",
+  "enableNotifications": false,
+  "enableMicrophone": false,
+  "enableXRScene": false,
+  "startUrl": "/Banana-Skyline/",
+  "iconUrl": "https://seyedalicheraghi.github.io/Banana-Skyline/assets/icon-512.png",
+  "maskableIconUrl": "https://seyedalicheraghi.github.io/Banana-Skyline/assets/icon-512.png",
+  "splashScreenFadeOutDuration": 300,
+  "signingKey": {
+    "path": "./android.keystore",
+    "alias": "android"
+  },
+  "appVersionName": "1",
+  "appVersionCode": 1,
+  "shortcuts": [],
+  "generatorApp": "unknown",
+  "webManifestUrl": "https://seyedalicheraghi.github.io/Banana-Skyline/manifest.webmanifest",
+  "fallbackType": "customtabs",
+  "features": {
+    "horizonPlatformSDK": {
+      "enabled": true
+    }
+  },
+  "alphaDependencies": {
+    "enabled": false
+  },
+  "enableSiteSettingsShortcut": true,
+  "isChromeOSOnly": false,
+  "isMetaQuest": true,
+  "horizonOSAppMode": "2D",
+  "fullScopeUrl": "https://seyedalicheraghi.github.io/Banana-Skyline/",
+  "minSdkVersion": 23,
+  "orientation": "landscape",
+  "fingerprints": [
+    {
+      "name": "signing key",
+      "value": "45:92:9E:9B:EE:C7:F2:FB:E8:E9:4B:67:BB:2B:88:BE:43:64:DD:C4:56:82:4A:68:03:6D:C7:C2:98:91:C5:C7"
+    }
+  ],
+  "additionalTrustedOrigins": [],
+  "retainedBundles": [],
+  "protocolHandlers": [],
+  "fileHandlers": [],
+  "launchHandlerClientMode": "",
+  "displayOverride": [],
+  "appVersion": "1"
+}

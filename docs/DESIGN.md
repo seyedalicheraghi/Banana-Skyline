@@ -10,8 +10,12 @@ Runs from one codebase in two ways:
 - **Meta Quest**: Quest Browser at the same URL through `adb reverse tcp:8080 tcp:8080` over USB
   (`localhost` is a secure context, so WebXR works). "Enter VR" puts you on your monkey's rooftop; you
   physically swing and release to throw, or use the thumbstick aim mode.
+- **Quest app**: `npm run deploy` publishes a static build to GitHub Pages
+  (`https://seyedalicheraghi.github.io/Banana-Skyline/`). `npm run apk` wraps that address in an Android
+  package (a Bubblewrap Trusted Web Activity, 2D app mode) and installs it with adb. A service worker
+  caches the whole build, so the app starts offline after its first run.
 
-No build step. ES modules served as-is. `index.html` has an import map:
+No build step for development (`npm run build` only assembles `dist/` for publishing). ES modules served as-is. `index.html` has an import map:
 `"three"` → `/node_modules/three/build/three.module.js`, `"three/addons/"` → `/node_modules/three/examples/jsm/`.
 Only runtime dependency: `three@0.186.1`. Dev-only: `iwer@2.5.0` (Meta's WebXR emulator), loaded only with `?emulate` to try VR mode without a headset. No CDN or network assets: everything (models, textures, sounds) is
 generated in code, so the game works offline on the headset.
@@ -42,6 +46,9 @@ All tunables live in `src/core/constants.js`. Read it.
 | `tests/` | `node --test` unit tests for `src/core` | |
 | `server.mjs` | Zero-dependency static server, 127.0.0.1:8080 | |
 | `scripts/quest.mjs` | adb helper: find headset, reverse port, open the game in Quest Browser |
+| `scripts/build.mjs` | `dist/`: index.html with the import map pointed at `lib/`, `src/` as is, the three.js files reached from `src/` imports, icons (`scripts/icons.mjs`), `manifest.webmanifest`, `sw.js` (from `scripts/sw.js`: precache every file, cache-first, one cache per build hash) | `server.mjs --dist` serves it on 8081 |
+| `scripts/deploy.mjs` | Commits `dist/` as the `gh-pages` branch through a temporary index (working tree and branch untouched) and pushes it | |
+| `scripts/apk.mjs` + `quest-app/twa-manifest.json` | Bubblewrap update + build, signing key in `quest-app/` (git-ignored), `assetlinks.json`, adb install | |
 | `src/app/remote-log.js` | In Quest Browser on localhost (or with `?log`): POSTs load, VR start/end, errors, fps and throws to `/__log`; `server.mjs` prints them as `[headset]` lines | |
 
 Modules talk only through the contracts below. `src/core` must stay importable in Node.
