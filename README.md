@@ -6,7 +6,8 @@ Bananas blow holes in buildings, monkeys fall when their roof is gone, and the m
 being hit.
 
 Plays in a desktop browser and in VR on Meta Quest: as an app in the Quest library, or in Quest Browser
-served from this PC over USB. Play it in any browser at <https://seyedalicheraghi.github.io/Banana-Skyline/>.
+served from this PC over USB. Play it in any browser at <https://seyedalicheraghi.github.io/Banana-Skyline/>,
+or as a Windows program (the desktop build below, for Steam and itch.io).
 
 ## Play on this PC
 
@@ -123,10 +124,60 @@ says so: `https://seyedalicheraghi.github.io/.well-known/assetlinks.json` must c
 `seyedalicheraghi.github.io`, not this one. Until the file is there, the app works, but shows a small browser
 bar at the top. `npm run apk` reports which case you are in.
 
+## Desktop build (Steam / itch.io)
+
+Steam and itch.io distribute programs, not web pages, so for them the game ships as a Windows program: the
+static build (`dist/`) inside an [Electron](https://www.electronjs.org/) window. It is the flat-screen game
+with the PC controls above; there is no VR in it (see below).
+
+```bash
+npm run desktop
+```
+
+builds `dist/` and opens it in an Electron window from this folder. F11 toggles full screen. To package it:
+
+```bash
+npm run desktop:build
+```
+
+This builds `dist/`, draws the app icon (`desktop/build/icon.ico`, from `scripts/icons.mjs`: no binary is
+committed) and runs electron-builder for Windows x64. The first run downloads Electron and the NSIS tools into
+`%LOCALAPPDATA%` caches; after that the build works offline. It writes to `desktop/out/` (git-ignored):
+
+| File | What |
+|---|---|
+| `BananaSkyline-0.1.0-setup.exe` | Installer (NSIS): per user, asks for the folder, adds a Start menu shortcut and an uninstaller |
+| `BananaSkyline-0.1.0-portable.exe` | One file that runs without installing (it unpacks itself to a temporary folder on each start) |
+| `win-unpacked/` | The installed program as a folder: `Banana Skyline.exe` plus Electron's files. This is what the stores get |
+
+The exe is not code-signed, so Windows SmartScreen warns the first time someone runs it. Neither store requires
+signing; with a certificate, electron-builder signs when `CSC_LINK` and `CSC_KEY_PASSWORD` are set. macOS
+(`npm run desktop:build -- --mac`, on a Mac) and Linux (`-- --linux`) targets are configured in
+`desktop/electron-builder.json` but have not been built here.
+
+**Steam.** In [Steamworks](https://partner.steamgames.com/), give the app one Windows depot whose content is
+the `win-unpacked/` folder and upload it with SteamPipe: `steamcmd +login <account> +run_app_build <app_build.vdf>`
+with a depot script pointing at that folder, or the SteamPipe GUI from the Steamworks SDK. The launch option is
+`Banana Skyline.exe`. The game has no Steam features, so nothing from the Steamworks SDK goes into the depot, and
+no redistributables need to be selected: Electron brings everything it needs on Windows 10 or newer.
+
+**itch.io.** Zip the `win-unpacked/` folder and upload it as a Windows executable, or push the folder with
+[butler](https://itch.io/docs/butler/). The portable exe works as a single-file download too.
+
+**No VR in this build.** Official Electron builds have no OpenXR, so WebXR reports no VR support
+(`navigator.xr.isSessionSupported('immersive-vr')` is false) and the "Play in VR" button never appears. PC-VR players use the web version: open
+<https://seyedalicheraghi.github.io/Banana-Skyline/> in Chrome or Edge with SteamVR set as the OpenXR runtime,
+and press Play in VR.
+
+How it works: `desktop/main.mjs` opens one window and serves `dist/` through a privileged `app://` scheme
+(`file://` would refuse module scripts and the import map). The page runs sandboxed without Node, cannot open
+windows or navigate elsewhere, and every http(s) request is refused: the game needs no network.
+`tests/desktop.test.mjs` covers the path mapping (nothing outside `dist/` is served) and the icon file.
+
 ## For developers
 
 - `docs/DESIGN.md`: architecture, coordinates, and the contracts between modules.
-- `npm test`: unit tests for the game logic, prefs and server (`node --test`).
+- `npm test`: unit tests for the game logic, prefs, server, build and desktop app (`node --test`).
 - `npm run check`: parses every module, loads them in Node, and verifies every import resolves.
 - No build step for development and no network assets: the browser loads `src/` as ES modules; three.js
   comes from `node_modules` through the import map in `index.html`. Everything you see and hear is

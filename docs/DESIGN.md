@@ -14,6 +14,9 @@ Runs from one codebase in two ways:
   (`https://seyedalicheraghi.github.io/Banana-Skyline/`). `npm run apk` wraps that address in an Android
   package (a Bubblewrap Trusted Web Activity, 2D app mode) and installs it with adb. A service worker
   caches the whole build, so the app starts offline after its first run.
+- **Desktop app** (Steam / itch.io): `npm run desktop:build` wraps the same `dist/` in an Electron window
+  (`desktop/main.mjs`) and packages it with electron-builder: a Windows installer and a portable exe in
+  `desktop/out/`. Flat screen only: Electron has no OpenXR, so there is no WebXR there.
 
 No build step for development (`npm run build` only assembles `dist/` for publishing). ES modules served as-is. `index.html` has an import map:
 `"three"` → `/node_modules/three/build/three.module.js`, `"three/addons/"` → `/node_modules/three/examples/jsm/`.
@@ -44,6 +47,8 @@ All tunables live in `src/core/constants.js`. Read it.
 | `src/audio/` | Synthesized WebAudio sound effects and jingles | `Sfx` |
 | `src/xr/` | WebXR: session, rig, controllers/hands, throwing, VR panels | `XRMode` |
 | `tests/` | `node --test` unit tests for `src/core` | |
+| `desktop/` | The Electron app: `main.mjs` (one 1280×720 window, the privileged `app://` scheme serving `dist/`, sandboxed page without Node, no new windows, no navigation or network elsewhere, F11 full screen), `files.mjs` (request → file in `dist/`, types, 404 for anything else), `icon.mjs` (.ico from `scripts/icons.mjs`), `electron-builder.json` (targets, `desktop/out/`) | `tests/desktop.test.mjs` |
+| `scripts/desktop.mjs` | Builds `dist/`, writes `desktop/build/icon.{ico,png}`, then runs Electron (`npm run desktop`) or electron-builder (`npm run desktop:build`: Windows x64 NSIS installer + portable exe; `-- --mac` / `-- --linux` on those machines) | |
 | `server.mjs` | Zero-dependency static server, 127.0.0.1:8080 | |
 | `scripts/quest.mjs` | adb helper: find headset, reverse port, open the game in Quest Browser |
 | `scripts/build.mjs` | `dist/`: index.html with the import map pointed at `lib/`, `src/` as is, the three.js files reached from `src/` imports, icons (`scripts/icons.mjs`), `manifest.webmanifest`, `sw.js` (from `scripts/sw.js`: precache every file, cache-first, one cache per build hash) | `server.mjs --dist` serves it on 8081 |

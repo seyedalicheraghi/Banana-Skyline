@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "description": "Two monkeys, a windy skyline, and bananas. Plays in a desktop browser and in VR on Meta Quest (WebXR).",
+  "author": "Ali Cheraghi",
+  "main": "desktop/main.mjs",
   "scripts": {
     "start": "node server.mjs",
     "test": "node --test tests/*.test.mjs",
@@ -12,7 +14,9 @@
     "build": "node scripts/build.mjs",
     "preview": "node scripts/build.mjs && node server.mjs --dist",
     "deploy": "node scripts/deploy.mjs",
-    "apk": "node scripts/apk.mjs"
+    "apk": "node scripts/apk.mjs",
+    "desktop": "node scripts/desktop.mjs",
+    "desktop:build": "node scripts/desktop.mjs --build"
   },
   "dependencies": {
     "three": "0.186.1"
@@ -21,6 +25,8 @@
     "node": ">=22"
   },
   "devDependencies": {
+    "electron": "45.2.3",
+    "electron-builder": "26.18.0",
     "iwer": "2.5.0"
   }
 }

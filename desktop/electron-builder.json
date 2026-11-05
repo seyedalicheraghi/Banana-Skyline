@@ -1,0 +1,43 @@
+{
+  "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
+  "appId": "io.github.seyedalicheraghi.bananaskyline",
+  "productName": "Banana Skyline",
+  "directories": {
+    "buildResources": "desktop/build",
+    "output": "desktop/out"
+  },
+  "files": [
+    "desktop/main.mjs",
+    "desktop/files.mjs",
+    "dist/**/*",
+    "!node_modules/**/*"
+  ],
+  "asar": true,
+  "npmRebuild": false,
+  "publish": null,
+  "win": {
+    "icon": "desktop/build/icon.ico",
+    "target": [
+      { "target": "nsis", "arch": ["x64"] },
+      { "target": "portable", "arch": ["x64"] }
+    ]
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "artifactName": "BananaSkyline-${version}-setup.${ext}"
+  },
+  "portable": {
+    "artifactName": "BananaSkyline-${version}-portable.${ext}"
+  },
+  "mac": {
+    "icon": "desktop/build/icon.png",
+    "category": "public.app-category.games",
+    "target": ["dmg", "zip"]
+  },
+  "linux": {
+    "icon": "desktop/build/icon.png",
+    "category": "Game",
+    "target": ["AppImage", "tar.gz"]
+  }
+}
