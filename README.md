@@ -75,10 +75,12 @@ dependency).
 ## The Quest app
 
 **Banana Skyline** is installed on the headset as an app: Library → **Unknown Sources** → Banana Skyline.
-It runs without this PC. The app is a small Android package made with Meta's
-[Bubblewrap](https://developers.meta.com/horizon/documentation/web/pwa-packaging/) that opens the game
-published on GitHub Pages full screen. It needs Wi-Fi the first time. After that it starts offline,
-because a service worker keeps every file of the game on the headset.
+It runs without this PC and opens straight into VR. The app is a small Android package made with Meta's
+[Bubblewrap](https://developers.meta.com/horizon/documentation/web/pwa-packaging/) in Meta's *immersive*
+PWA mode: it loads the game published on GitHub Pages with `?app`, and the game then enters VR by itself
+(`src/app/launch.js`), since an immersive app has no flat window to put a button in. (Meta's *2D* mode would
+give a flat window instead, with no WebXR at all.) It needs Wi-Fi the first time. After that it starts
+offline, because a service worker keeps every file of the game on the headset.
 
 ### Update the game
 
@@ -118,11 +120,12 @@ One-time setup on a new PC:
    cannot replace the installed one: you would have to run `adb uninstall io.github.seyedalicheraghi.bananaskyline`
    first, which also clears the game's settings.
 
-**Browser bar.** Android only trusts the app to show the site without a browser bar if the site's origin
-says so: `https://seyedalicheraghi.github.io/.well-known/assetlinks.json` must contain
-`quest-app/assetlinks.json`, which `npm run apk` writes. That address belongs to the user site repository
-`seyedalicheraghi.github.io`, not this one. Until the file is there, the app works, but shows a small browser
-bar at the top. `npm run apk` reports which case you are in.
+**Asset links.** An immersive app only launches if the site's origin vouches for it:
+`https://seyedalicheraghi.github.io/.well-known/assetlinks.json` must list the app's package and signing
+key. `npm run apk` writes that file as `quest-app/assetlinks.json` and checks the published one. It lives in
+the GitHub user-site repository [`seyedalicheraghi.github.io`](https://github.com/seyedalicheraghi/seyedalicheraghi.github.io)
+(`.well-known/assetlinks.json`, plus an empty `.nojekyll`), not in this one: after a new signing key, copy
+the file there and push.
 
 ## Desktop build (Steam / itch.io)
 

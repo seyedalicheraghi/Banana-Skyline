@@ -83,7 +83,7 @@ function fingerprint(config, manifest, passwords) {
   return /SHA256:\s*([0-9A-F:]{95})/.exec(out)?.[1] ?? fail(['Could not read the SHA-256 fingerprint from keytool:', out]);
 }
 
-/** The Digital Asset Links file that lets the app open the site without a browser bar. */
+/** The Digital Asset Links file the site publishes to vouch for the app; an immersive app needs it to launch. */
 function assetLinks(packageId, fingerprints) {
   return [{
     relation: ['delegate_permission/common.handle_all_urls'],
@@ -98,10 +98,12 @@ async function checkAssetLinks(manifest) {
     const links = res.ok ? await res.json() : [];
     const ok = links.some(l => l.target?.package_name === manifest.packageId
       && manifest.fingerprints.every(f => l.target.sha256_cert_fingerprints?.includes(f.value)));
-    if (ok) return console.log(`${url} vouches for this app: it opens without a browser bar.`);
+    if (ok) return console.log(`${url} vouches for this app.`);
   } catch { /* reported below */ }
-  console.log(`${url} does not list this app yet, so it opens with a browser bar at the top.`);
-  console.log(`To remove the bar, publish quest-app/assetlinks.json at that address (see README).`);
+  console.log(`${url} does not list this app (package and signing key).`);
+  console.log(manifest.horizonOSAppMode === 'immersive'
+    ? 'An immersive app does not launch until it does: publish quest-app/assetlinks.json at that address (see README).'
+    : 'The app opens with a browser bar at the top until it does: publish quest-app/assetlinks.json at that address (see README).');
 }
 
 function run(what, cmd, args, { shell = false, env } = {}) {

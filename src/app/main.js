@@ -7,6 +7,7 @@ import { Sfx } from '../audio/sfx.js';
 import { XRMode } from '../xr/xr.js';
 import { loadPrefs, savePrefs } from './prefs.js';
 import { createRemoteLog } from './remote-log.js';
+import { launchedAsApp } from './launch.js';
 
 const userAgent = navigator.userAgent; // before ?emulate replaces it with a Quest's
 
@@ -138,6 +139,9 @@ startDemo();
 XRMode.isSupported().then((ok) => {
   ui.setVRSupported(ok);
   remote.send('vr-supported', { ok });
+  // The Quest app launches straight into VR (Meta's immersive PWA mode shows no 2D panel): the tap on
+  // the app icon counts as the user activation requestSession needs, as long as we ask right away.
+  if (ok && launchedAsApp()) xr.enter().then((entered) => remote.send('vr-auto', { ok: entered }));
 }).catch(() => ui.setVRSupported(false));
 
 const timer = new THREE.Timer(); // not connect()ed: a page hidden during VR would get dt = 0; big steps are capped below

@@ -12,7 +12,10 @@ Runs from one codebase in two ways:
   physically swing and release to throw, or use the thumbstick aim mode.
 - **Quest app**: `npm run deploy` publishes a static build to GitHub Pages
   (`https://seyedalicheraghi.github.io/Banana-Skyline/`). `npm run apk` wraps that address in an Android
-  package (a Bubblewrap Trusted Web Activity, 2D app mode) and installs it with adb. A service worker
+  package (a Bubblewrap Trusted Web Activity in Meta's immersive app mode; 2D mode has no WebXR) and
+  installs it with adb. The app opens the site with `?app`, and `main.js` then enters VR at once
+  (`src/app/launch.js`: the icon tap counts as the user activation). The site's origin must publish
+  `/.well-known/assetlinks.json` for the app, or an immersive app does not launch. A service worker
   caches the whole build, so the app starts offline after its first run.
 - **Desktop app** (Steam / itch.io): `npm run desktop:build` wraps the same `dist/` in an Electron window
   (`desktop/main.mjs`) and packages it with electron-builder: a Windows installer and a portable exe in
@@ -41,7 +44,7 @@ All tunables live in `src/core/constants.js`. Read it.
 | Path | What | Notes |
 |---|---|---|
 | `src/core/` | Pure game logic, no DOM, no three.js | constants, rng, events, city, physics, ai, game. Unit-tested in Node. |
-| `src/app/` | `main.js` (wiring + loop), `prefs.js` (localStorage prefs) | Integration layer. |
+| `src/app/` | `main.js` (wiring + loop), `prefs.js` (localStorage prefs), `launch.js` (`?app`: started as the Quest app, enter VR at once) | Integration layer. |
 | `src/render/` | Everything drawn with three.js: city, sky, monkeys, banana, effects, PC camera | `GameView`, `PCCamera` |
 | `src/ui/` | DOM overlay: title/menus, HUD, PC input (mouse/keyboard/typed), CSS | `UI` |
 | `src/audio/` | Synthesized WebAudio sound effects and jingles | `Sfx` |

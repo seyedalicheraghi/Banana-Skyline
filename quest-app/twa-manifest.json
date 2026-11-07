@@ -15,7 +15,7 @@
   "enableNotifications": false,
   "enableMicrophone": false,
   "enableXRScene": false,
-  "startUrl": "/Banana-Skyline/",
+  "startUrl": "/Banana-Skyline/?app",
   "iconUrl": "https://seyedalicheraghi.github.io/Banana-Skyline/assets/icon-512.png",
   "maskableIconUrl": "https://seyedalicheraghi.github.io/Banana-Skyline/assets/icon-512.png",
   "splashScreenFadeOutDuration": 300,
@@ -23,8 +23,8 @@
     "path": "./android.keystore",
     "alias": "android"
   },
-  "appVersionName": "1",
-  "appVersionCode": 1,
+  "appVersionName": "2",
+  "appVersionCode": 2,
   "shortcuts": [],
   "generatorApp": "unknown",
   "webManifestUrl": "https://seyedalicheraghi.github.io/Banana-Skyline/manifest.webmanifest",
@@ -40,10 +40,10 @@
   "enableSiteSettingsShortcut": true,
   "isChromeOSOnly": false,
   "isMetaQuest": true,
-  "horizonOSAppMode": "2D",
+  "horizonOSAppMode": "immersive",
   "fullScopeUrl": "https://seyedalicheraghi.github.io/Banana-Skyline/",
   "minSdkVersion": 23,
-  "orientation": "landscape",
+  "orientation": "default",
   "fingerprints": [
     {
       "name": "signing key",
@@ -56,5 +56,5 @@
   "fileHandlers": [],
   "launchHandlerClientMode": "",
   "displayOverride": [],
-  "appVersion": "1"
+  "appVersion": "2"
 }
