@@ -2,7 +2,7 @@
 // VERSION (a hash of the build) and FILES (every file of the build). Installing caches all of them, so
 // the game starts with no network; a new build has a new VERSION, replaces the cache and is used from
 // the next launch on.
-const VERSION = '6886d4462f61';
+const VERSION = '9d509651a301';
 const FILES = [
   "./",
   "assets/icon-192.png",
@@ -11,6 +11,7 @@ const FILES = [
   "lib/three/build/three.core.js",
   "lib/three/build/three.module.js",
   "manifest.webmanifest",
+  "src/app/launch.js",
   "src/app/main.js",
   "src/app/prefs.js",
   "src/app/remote-log.js",
