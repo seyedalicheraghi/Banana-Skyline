@@ -8,7 +8,8 @@ import * as THREE from 'three';
 import { BUILDING_DEPTH, CITY_WIDTH, MAX_POWER, VR_SCALE } from '../src/core/constants.js';
 import { Game } from '../src/core/game.js';
 import { THROW_BOOST, XRMode } from '../src/xr/xr.js';
-import { BOW_MIN_POWER, THROW_BOOSTS, bowAim } from '../src/xr/throw.js';
+import { BOW_MIN_POWER, BOW_REST, THROW_BOOSTS, bowAim } from '../src/xr/throw.js';
+import { launchVelocity } from '../src/core/physics.js';
 import { MISS } from './helpers.mjs';
 import {
   FRAME, FakeWebXRManager, FakeXRSystem, TEST_SEED, buttonCenter, createXRApp, headInScene, installXREnv,
@@ -888,7 +889,7 @@ describe('XRMode robustness', () => {
     app.frame(); // laser on, banana floating, wrist panel on the left hand
 
     const xr = app.xr;
-    const mine = collectResources([xr.rig, xr.arrow.group, xr.laser.group, xr.banana.root, xr.wrist.mesh]);
+    const mine = collectResources([xr.rig, xr.arrow.group, xr.laser.group, xr.banana.root, xr.wrist.mesh, xr.bow.group, xr.path.group]);
     // Glove geometry is one module-wide cache shared by every XRMode (bounded, never disposed).
     const other = new XRMode({ renderer: { xr: new FakeWebXRManager() }, scene: new THREE.Scene(), world: new THREE.Group() });
     const shared = [...collectResources([other.rig]).geometries].filter((g) => mine.geometries.has(g));
@@ -928,14 +929,25 @@ describe('XRMode bow mode', () => {
     return app;
   }
   const ahead = (p) => p.clone().add(new THREE.Vector3(0, 0, -1));
-  /** Hold the bow at `bowAt` and take the string at `stringAt` (rig-local), then hold the pull for `frames`. */
-  function pull(app, { bowSlot = 1, stringSlot = 0, bowAt, stringAt, frames = 4, button = 'select' }) {
+  /** Where the banana waits on the idle bow held at `bowAt`: the bow points along rig -z, the string rests BOW_REST behind. */
+  const nockOf = (bowAt) => bowAt.clone().add(new THREE.Vector3(0, 0, BOW_REST));
+  /**
+   * Hold the bow at `bowAt` with `bowSlot`; with `stringSlot` press `button` at `grabAt` (the banana unless
+   * told otherwise), then draw that hand to `stringAt` over `frames` frames and hold it there.
+   */
+  function pull(app, { bowSlot = 1, stringSlot = 0, bowAt, stringAt, grabAt = null, frames = 6, button = 'select' }) {
     app.manager.pose(bowSlot, { position: bowAt, lookAt: ahead(bowAt) });
+    app.run(3); // the idle bow settles along rig -z
+    const from = grabAt ?? nockOf(bowAt);
     app.frame(FRAME, () => {
-      app.manager.pose(stringSlot, { position: stringAt, lookAt: ahead(stringAt) });
+      app.manager.pose(stringSlot, { position: from, lookAt: ahead(from) });
       app.manager.fire(stringSlot, `${button}start`);
     });
-    app.run(frames);
+    for (let k = 1; k <= frames; k++) {
+      const p = from.clone().lerp(stringAt, k / frames);
+      app.frame(FRAME, () => app.manager.pose(stringSlot, { position: p, lookAt: ahead(p) }));
+    }
+    app.run(2);
   }
   /** Let go of the string; returns the 'throw' events that caused. */
   function letGo(app, { stringSlot = 0, button = 'select' } = {}) {
@@ -943,13 +955,16 @@ describe('XRMode bow mode', () => {
     app.frame(FRAME, () => app.manager.fire(stringSlot, `${button}end`));
     return app.eventsOf('throw', mark);
   }
-  /** Bow hand ahead and above, string hand back near the chest: 40 cm forward, 20 cm up, 20 cm across. */
+  /** Bow hand ahead and above, string hand drawn back to the chest: 0.4 forward, 0.2 up, 0.2 across (rig-local). */
   function stance(app) {
     return {
       bowAt: new THREE.Vector3(app.head.x - 0.1, 1.45, app.head.z - 0.55),
       stringAt: new THREE.Vector3(app.head.x + 0.1, 1.25, app.head.z - 0.15),
     };
   }
+  /** What that stance must read: rig -z is toward the opponent, the pull counts in the play plane only (0.4 forward, 0.2 up). */
+  const expectedAim = (facing = 1) => bowAim({ x: 0.4 * facing, y: 0.2 }, { x: 0, y: 0 }, Math.hypot(0.4, 0.2), facing);
+  const previewSeconds = (game, aim, facing = 1) => Math.min(6, Math.max(1.2, (1.15 * launchVelocity(aim.angle, aim.power, facing).vy) / game.gravity));
 
   test('the bow is the default; the menu switches to hand and back and saves it', async () => {
     const app = await myTurn();
@@ -973,27 +988,32 @@ describe('XRMode bow mode', () => {
     assert.ok(isUnder(bow.group, app.xr.rig), 'a rig child, like the hands');
     const left = app.manager.getControllerGrip(1);
     assert.ok(bow.group.position.distanceTo(left.position) < 1e-6, 'at the left (off) hand');
+    assert.equal(app.xr.bowHand, app.xr.hands[1]);
     assert.equal(bow.nock.visible, true);
     assert.ok(isUnder(bow.banana.mesh, bow.nock), 'the banana rides on the string');
-    assert.ok(app.view.bananas.some((b) => b.mesh === bow.banana.mesh), 'the bow got its banana from the view');
+    assert.equal(app.view.bananas.length, 2, 'one banana for the hand throw, one for the bow, both from the view');
+    assert.ok(app.view.bananas.some((b) => b.mesh === bow.banana.mesh));
+    assert.ok(bow.nockAt(new THREE.Vector3()).distanceTo(nockOf(left.position)) < 1e-6, 'the banana rests BOW_REST behind the bow hand');
     assert.equal(app.xr.banana.root.visible, false, 'no hand-throw banana');
     assert.equal(app.xr.path.group.visible, false, 'no preview until you draw');
-    assert.ok(app.xr.hud.canvas.texts.some((t) => /pull the banana back/.test(t)), 'the HUD explains the bow');
+    assert.ok(app.xr.hud.canvas.texts.some((t) => /grab the banana/i.test(t)), 'the HUD explains the bow');
     assertQuiet();
   });
 
-  test('pulling the string aims the shot (angle from the hands, power from the draw) with a path preview; letting go shoots', async () => {
+  test('grabbing the banana and pulling back aims the shot (angle from the hands, power from the draw) with a path preview; letting go shoots', async () => {
     const app = await myTurn();
     const game = app.game;
     const { bowAt, stringAt } = stance(app);
+    const pulses = app.manager.slot(0).source.pulses;
+    const bowPulses = app.manager.slot(1).source.pulses;
     pull(app, { bowAt, stringAt });
     assert.ok(app.xr.draw, 'drawing');
-    // Rig -z is toward the opponent: 0.4 forward and 0.2 up; the draw is the full distance between the hands.
-    const expected = bowAim({ x: 0.4, y: 0.2 }, { x: 0, y: 0 }, bowAt.distanceTo(stringAt), 1);
+    const expected = expectedAim();
     assert.ok(expected.angle > 24 && expected.angle < 29, `angle ${expected.angle}`);
-    assert.ok(expected.power > 84 && expected.power < 92, `power ${expected.power}`);
+    assert.ok(expected.power > 55 && expected.power < 65, `power ${expected.power}`);
     assert.deepEqual(game.aim[0], expected, 'the game aim follows the draw');
-    assert.ok(app.xr.hud.canvas.texts.some((t) => t.startsWith('Aim:')), 'HUD shows the live aim');
+    assert.ok(app.xr.hud.canvas.texts.some((t) => t === `Aim: ${Math.round(expected.angle)}° · power ${Math.round(expected.power)}`), 'HUD shows the live aim');
+    assert.ok(pulses.length >= 3, `the string clicks as it tightens (${pulses.length} pulses)`);
 
     const bow = app.xr.bow;
     assert.equal(bow.drawing, true);
@@ -1006,15 +1026,15 @@ describe('XRMode bow mode', () => {
 
     const path = app.xr.path;
     assert.equal(path.group.visible, true, 'preview shown');
-    // The preview ends where the banana would land: in this city that is the building in front of you.
-    const points = game.previewPath(0, expected.angle, expected.power, 1.2);
-    assert.equal(path.dots.count, Math.min(48, points.length - 1), 'one dot per preview point (up to 48)');
+    const points = game.previewPath(0, expected.angle, expected.power, previewSeconds(game, expected));
+    assert.equal(path.dots.count, Math.min(48, points.length - 1), 'one dot per preview point (up to 48), up to just past the apex');
     assert.ok(path.dots.count >= 1);
     const first = new THREE.Vector3().setFromMatrixPosition(new THREE.Matrix4().fromArray(path.dots.instanceMatrix.array, 0));
     const hand = game.handPosition(0);
     assert.ok(first.x > hand.x && first.x < hand.x + 6 && first.y > hand.y, `the preview leaves the hand toward the opponent (${first.x.toFixed(1)}, ${first.y.toFixed(1)})`);
     assert.ok(path.group.matrixWorld.equals(app.world.matrixWorld), 'drawn in world coordinates');
 
+    const before = { string: pulses.length, bow: bowPulses.length };
     const throws = letGo(app);
     assert.equal(throws.length, 1, 'one shot');
     const t = throws[0].payload;
@@ -1022,6 +1042,8 @@ describe('XRMode bow mode', () => {
     assert.equal(t.player, 0);
     assert.equal(t.angle, expected.angle);
     assert.equal(t.power, expected.power);
+    assert.deepEqual(pulses.slice(before.string), [[0.8, 60]], 'release pulse on the string hand');
+    assert.deepEqual(bowPulses.slice(before.bow), [[0.5, 40]], 'and a softer one on the bow hand');
     assert.deepEqual(app.throwCalls, [], 'not a velocity throw');
     assert.equal(game.phase, 'flight');
     assert.equal(app.xr.draw, null);
@@ -1031,18 +1053,20 @@ describe('XRMode bow mode', () => {
     assertQuiet();
   });
 
-  test('a slack string is let go without a shot; the bow stays and a real draw follows', async () => {
+  test('a slack string is let go without a shot and leaves the aim as it was; the bow stays and a real draw follows', async () => {
     const app = await myTurn();
     const game = app.game;
     const { bowAt, stringAt } = stance(app);
-    const close = bowAt.clone().add(new THREE.Vector3(0.04, -0.04, 0.08)); // 10 cm apart
-    pull(app, { bowAt, stringAt: close });
+    const aimBefore = { ...game.aim[0] };
+    const barely = nockOf(bowAt).add(new THREE.Vector3(0.02, -0.02, 0.04)); // 4 cm back from where the banana rests
+    pull(app, { bowAt, stringAt: barely });
     assert.ok(app.xr.draw, 'the string is taken');
     assert.ok(game.aim[0].power < BOW_MIN_POWER, `power ${game.aim[0].power}`);
     assert.equal(app.xr.path.group.visible, false, 'no preview: letting go would not shoot');
     assert.deepEqual(letGo(app), [], 'no shot');
     assert.equal(game.phase, 'aim');
     assert.equal(game.turn, 0);
+    assert.deepEqual(game.aim[0], aimBefore, 'the aim is back to what it was');
     app.frame();
     assert.equal(app.xr.bow.group.visible, true, 'the bow is still offered');
     assert.equal(app.xr.bow.drawing, false);
@@ -1051,28 +1075,103 @@ describe('XRMode bow mode', () => {
     assertQuiet();
   });
 
-  test('with tracked hands, a pinch of either hand takes the string and the other hand holds the bow', async () => {
-    const app = await myTurn({ hands: true });
-    assert.equal(app.xr.mode, 'bow');
-    const bowAt = new THREE.Vector3(app.head.x + 0.15, 1.45, app.head.z - 0.55);
-    const stringAt = new THREE.Vector3(app.head.x - 0.1, 1.2, app.head.z - 0.1);
-    pull(app, { bowSlot: 0, stringSlot: 1, bowAt, stringAt }); // left hand pinches
-    assert.equal(app.xr.draw?.hand, app.xr.hands[1]);
-    assert.equal(app.xr.draw?.bowHand, app.xr.hands[0]);
-    assert.ok(app.xr.bow.group.position.distanceTo(bowAt) < 1e-6, 'the bow moved to the right hand');
-    const throws = letGo(app, { stringSlot: 1 });
-    assert.equal(throws.length, 1);
-    assert.equal(throws[0].payload.method, 'aim');
-    assert.equal(app.xr.dominant, 'left', 'the pinching hand throws from now on');
+  test('a press away from the banana takes nothing', async () => {
+    const app = await myTurn();
+    const { bowAt, stringAt } = stance(app);
+    pull(app, { bowAt, stringAt, grabAt: stringAt }); // pressed at the chest, half a meter from the banana
+    assert.equal(app.xr.draw, null);
+    assert.equal(app.xr.bow.drawing, false);
+    assert.deepEqual(letGo(app), []);
+    assert.equal(app.game.phase, 'aim');
     assertQuiet();
   });
 
-  test('the bow goes away with the menu and on the CPU turn, when pulling does nothing', async () => {
+  test('squeezing the hand that holds the bow hands it over; the freed hand then draws', async () => {
+    const app = await myTurn();
+    assert.equal(app.xr.bowHand, app.xr.hands[1], 'bow in the left hand');
+    click(app, 1, 'squeeze');
+    assert.equal(app.xr.draw, null, 'no draw');
+    assert.equal(app.xr.dominant, 'left');
+    app.frame();
+    const right = app.manager.getControllerGrip(0);
+    assert.equal(app.xr.bowHand, app.xr.hands[0], 'bow in the right hand now');
+    assert.ok(app.xr.bow.group.position.distanceTo(right.position) < 1e-6);
+    const bowAt = new THREE.Vector3(app.head.x + 0.1, 1.45, app.head.z - 0.55);
+    const stringAt = new THREE.Vector3(app.head.x - 0.1, 1.25, app.head.z - 0.15);
+    pull(app, { bowSlot: 0, stringSlot: 1, bowAt, stringAt });
+    assert.equal(app.xr.draw?.hand, app.xr.hands[1]);
+    assert.equal(app.xr.draw?.bowHand, app.xr.hands[0]);
+    const throws = letGo(app, { stringSlot: 1 });
+    assert.equal(throws.length, 1);
+    assert.deepEqual({ angle: throws[0].payload.angle, power: throws[0].payload.power }, expectedAim());
+    assertQuiet();
+  });
+
+  test('with tracked hands, a pinch at the banana takes the string', async () => {
+    const app = await myTurn({ hands: true });
+    assert.equal(app.xr.mode, 'bow');
+    const { bowAt, stringAt } = stance(app);
+    pull(app, { bowAt, stringAt }); // right hand pinches at the banana on the bow in the left hand
+    assert.equal(app.xr.draw?.hand, app.xr.hands[0]);
+    assert.equal(app.xr.draw?.bowHand, app.xr.hands[1]);
+    const throws = letGo(app);
+    assert.equal(throws.length, 1);
+    assert.equal(throws[0].payload.method, 'aim');
+    assertQuiet();
+  });
+
+  test('player 2 in a hot-seat match: the same pull shoots toward the other side', async () => {
+    const app = createXRApp(env, { prefs: BOW });
+    app.startDemo();
+    await enterVR(app);
+    clickButton(app, app.xr.menu, 'two-players');
+    settle(app);
+    const game = app.game;
+    untilMyTurn(app, 'player 1 turn');
+    assert.equal(game.throwShot(MISS), true);
+    app.runUntil(() => game.turn === 1 && game.phase === 'aim' && me(app) === 1 && fade(app) === 0, { label: 'player 2 on their roof', maxSeconds: 60 });
+    app.frame();
+    assert.equal(game.monkeys[1].facing, -1);
+    assert.equal(app.xr.bow.group.visible, true, 'the bow is offered on the other roof');
+    const { bowAt, stringAt } = stance(app);
+    pull(app, { bowAt, stringAt });
+    assert.deepEqual(game.aim[1], expectedAim(-1), 'the same angle toward the opponent');
+    const throws = letGo(app);
+    assert.equal(throws.length, 1);
+    assert.equal(throws[0].payload.player, 1);
+    assert.ok(throws[0].payload.vx < 0, `flies toward smaller x (vx ${throws[0].payload.vx.toFixed(1)})`);
+    assertQuiet();
+  });
+
+  test('letting go on a frame without a hand pose still shoots what was shown', async () => {
+    const app = await myTurn();
+    const { bowAt, stringAt } = stance(app);
+    pull(app, { bowAt, stringAt });
+    const shown = { ...app.game.aim[0] };
+    const mark = app.events.length;
+    app.frame(FRAME, () => {
+      app.manager.lose(0); // tracking blinks on the release frame
+      app.manager.fire(0, 'selectend');
+    });
+    const throws = app.eventsOf('throw', mark);
+    assert.equal(throws.length, 1, 'the shot is not lost');
+    assert.deepEqual({ angle: throws[0].payload.angle, power: throws[0].payload.power }, shown);
+    assertQuiet();
+  });
+
+  test('the bow goes away with the menu (even mid-draw) and on the CPU turn, when pulling does nothing', async () => {
     const app = await myTurn();
     const game = app.game;
+    const { bowAt, stringAt } = stance(app);
+    pull(app, { bowAt, stringAt });
+    assert.ok(app.xr.draw);
     tap(app, 0, BUTTON.b);
     assert.equal(app.xr.menu.visible, true);
+    assert.equal(app.xr.draw, null, 'the draw is dropped');
     assert.equal(app.xr.bow.group.visible, false, 'no bow behind the menu');
+    assert.equal(app.xr.path.group.visible, false);
+    assert.deepEqual(letGo(app), [], 'letting go now shoots nothing');
+    rest(app);
     tap(app, 0, BUTTON.b);
     app.frame();
     assert.equal(app.xr.bow.group.visible, true);
@@ -1081,7 +1180,6 @@ describe('XRMode bow mode', () => {
     app.runUntil(() => game.turn === 1 && game.phase === 'aim', { label: 'CPU turn' });
     app.frame();
     assert.equal(app.xr.bow.group.visible, false, 'no bow on the CPU turn');
-    const { bowAt, stringAt } = stance(app);
     pull(app, { bowAt, stringAt });
     assert.equal(app.xr.draw, null);
     assert.deepEqual(letGo(app), []);

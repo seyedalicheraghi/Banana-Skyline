@@ -249,14 +249,18 @@ const xr = new XRMode({ renderer, scene, world, view, sfx, getPrefs, setPrefs, s
   hides the monkey you are standing in.
 - Hands: simple monkey-glove models on both controllers (no downloaded controller models).
 - Throw ("bow" mode, default, `prefs.vrThrow`): on your turn a bow (`props.js` `Bow`, real size, a rig
-  child) sits in your off hand with the banana on the string. Trigger, grip or pinch with either hand
-  takes the string (that hand is the string hand, the other holds the bow). While drawing,
-  `throw.js` `bowAim`: direction string hand → bow hand in the play plane is the angle (0..180 toward the
-  opponent), the distance between the hands in real meters is the power (`BOW_SLACK` 6 cm → 0,
-  `BOW_FULL_DRAW` 55 cm → 100), both in halves; `game.setAim` follows it and `AimPath` draws
-  `game.previewPath(…, 1.2 s)` in world coordinates (where letting go now would send it). Letting go
-  calls `game.throwShot` (method `'aim'`); below `BOW_MIN_POWER` (15) it is a let-go, no shot. Haptic
-  clicks every 20 power while drawing.
+  child) sits in your off hand, the banana resting on the string `BOW_REST` (21 cm) behind the bow hand.
+  Trigger, grip or pinch within `BOW_GRAB_RADIUS` (30 cm) of that banana takes the string (that hand is
+  the string hand, the other keeps the bow); the same press by the hand holding the bow hands the bow
+  over instead. While drawing, `throw.js` `bowAim`: direction string hand → bow hand in the play plane
+  is the angle (0..180 toward the opponent; behind and below counts as backwards), the distance between
+  the hands measured in the play plane is the power (rest → 0, `BOW_PULL` 40 cm past rest → 100), both
+  in halves; `game.setAim` follows it and `AimPath` draws `game.previewPath` in world coordinates up to
+  just past the apex (1.15 × vy/g, 1.2–6 s): how far it goes, not where it lands. A hand without a pose
+  for a frame keeps the last reading. Letting go calls `game.throwShot` (method `'aim'`); below
+  `BOW_MIN_POWER` (15, about 6 cm past rest) it is a let-go: no shot, the aim put back as it was. Haptic
+  clicks every 20 power while drawing. The bow's materials are "transparent" at opacity 1 with
+  renderOrder 950, like the gloves, so the HUD (no depth test) does not paint over it.
 - Throw ("hand" mode): on your turn a banana (`view.createBananaMesh()`) appears in your
   dominant hand while you hold trigger or grip; swing and release. Release velocity = controller
   linear velocity (prefer `XRPose.linearVelocity`, else smoothed finite differences over the last

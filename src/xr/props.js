@@ -2,9 +2,13 @@
 // thumbstick aim arrow.
 
 import * as THREE from 'three';
+import { BOW_REST } from './throw.js';
 
 const HALO_COLOR = 0xffe36b;
 const BANANA_RENDER_ORDER = 955; // after the HUD (910), before the gloves (960)
+// Like the gloves (hands.js): "transparent" at opacity 1 so the bow sorts after the HUD, which is drawn
+// without a depth test, instead of being painted over by it.
+const BOW_RENDER_ORDER = 950;
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
 const ZERO = new THREE.Vector3();
 const _f = new THREE.Vector3();
@@ -144,9 +148,9 @@ export class HandBanana {
   }
 }
 
-const BOW_LIMB = 0.55;   // half length (meters; a prop you hold, so real size, not world scale)
-const BOW_BRACE = 0.21;  // the string's distance behind the riser at rest (+Z, toward you)
-const BOW_SETTLE = 14;   // damping rate of the idle bow's orientation: hand tremor stays out of it
+const BOW_LIMB = 0.55;      // half length (meters; a prop you hold, so real size, not world scale)
+const BOW_BRACE = BOW_REST; // the string's distance behind the riser at rest (+Z, toward you): where the draw starts
+const BOW_SETTLE = 14;      // damping rate of the idle bow's orientation: hand tremor stays out of it
 
 /**
  * The bow for the two-handed throw. It sits in the bow hand; the string runs from the limb tips to the
@@ -158,8 +162,8 @@ export class Bow {
   constructor(createMesh) {
     this.group = new THREE.Group();
     this.group.name = 'xr-bow';
-    this.woodMat = new THREE.MeshLambertMaterial({ color: 0x8a5524, emissive: 0x2c1a08 });
-    this.stringMat = new THREE.MeshBasicMaterial({ color: 0xf2ead2, fog: false, toneMapped: false });
+    this.woodMat = new THREE.MeshLambertMaterial({ color: 0x8a5524, emissive: 0x2c1a08, transparent: true });
+    this.stringMat = new THREE.MeshBasicMaterial({ color: 0xf2ead2, fog: false, toneMapped: false, transparent: true });
     // A recurve: the limbs bow toward the target and the tips come back to the string.
     const curve = new THREE.CatmullRomCurve3([
       new THREE.Vector3(0, -BOW_LIMB, BOW_BRACE), new THREE.Vector3(0, -BOW_LIMB * 0.55, 0.05), ZERO.clone(),
@@ -181,10 +185,16 @@ export class Bow {
     this.nock.add(this.banana.mesh, this.halo);
 
     this.group.add(this.limbs, this.riser, ...this.strings, this.nock);
+    for (const m of [this.limbs, this.riser, ...this.strings]) m.renderOrder = BOW_RENDER_ORDER;
     this.group.visible = false;
     this.settled = false;
     this.drawing = false;
     this.time = 0;
+  }
+
+  /** Where the nock (and the banana) is right now, in the bow's parent's (the rig's) coordinates. */
+  nockAt(target) {
+    return target.copy(this.nock.position).applyQuaternion(this.group.quaternion).add(this.group.position);
   }
 
   /** Size the banana like the one that flies through the scaled world. */

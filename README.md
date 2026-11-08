@@ -64,7 +64,7 @@ Controls in VR:
 
 | Do this | To |
 |---|---|
-| On your turn a bow appears in one hand. Pull the trigger (or grip, or pinch) with the other hand anywhere, pull it back like a bowstring, and let go | throw: the bow's direction is the angle, how far you pull is the power, and dots show where the banana will go |
+| On your turn a bow appears in one hand with the banana on its string. Reach for the banana with the other hand, hold the trigger (or grip, or pinch), pull back like a bowstring, and let go | throw: the bow's direction is the angle, how far you pull is the power, and dots show the first part of the banana's path. Squeeze the hand holding the bow to move it to the other hand |
 | Point at a panel and pull the trigger | press a button |
 | B or Y, or the Menu button on the scoreboard | open/close the menu: Throw: Hand throws by swinging the banana, Throw: Stick aims with the thumbstick; Throw boost High helps if hand throws fall short |
 | A or X | rematch when a match is over |

@@ -83,7 +83,7 @@ export function hudState(game, {
       hint = mode === 'stick'
         ? 'Stick up/down: angle · left/right: power · trigger throws'
         : mode === 'bow'
-          ? 'Bow in one hand · pull the banana back with the other · let go'
+          ? 'Grab the banana on the string with your free hand · pull back · let go'
           : 'Grab the banana, swing and let go';
     } else {
       turnText = /^you$/i.test(cur.name) ? 'Your turn' : `${cur.name}'s turn`;

@@ -1,7 +1,7 @@
 // Bow throw math (src/xr/throw.js bowAim) and the bow as the default VR throw.
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { BOW_FULL_DRAW, BOW_MIN_POWER, BOW_SLACK, bowAim } from '../src/xr/throw.js';
+import { BOW_FULL_DRAW, BOW_MIN_POWER, BOW_PULL, BOW_REST, bowAim } from '../src/xr/throw.js';
 import { DEFAULT_PREFS, sanitizePrefs } from '../src/app/prefs.js';
 import { hudState } from '../src/xr/state.js';
 import { MENU_ACTIONS } from '../src/xr/menu.js';
@@ -15,6 +15,8 @@ describe('bowAim', () => {
     assert.equal(bowAim({ x: 10, y: 6 }, { x: 11, y: 5 }, full, 1).angle, 135, 'up and backwards');
     assert.equal(bowAim({ x: 9, y: 5 }, { x: 10, y: 5 }, full, 1).angle, 180, 'backwards');
     assert.equal(bowAim({ x: 11, y: 4 }, { x: 10, y: 5 }, full, 1).angle, 0, 'aiming below the horizon is level');
+    assert.equal(bowAim({ x: 9, y: 4.9 }, { x: 10, y: 5 }, full, 1).angle, 180, 'behind and a little below is backwards too, not level');
+    assert.equal(bowAim({ x: 9, y: 5.1 }, { x: 10, y: 5 }, full, 1).angle, 174.5);
     assert.equal(bowAim({ x: 11, y: 6 }, { x: 10, y: 5 }, full, 1).angle, 45);
   });
 
@@ -23,15 +25,16 @@ describe('bowAim', () => {
     assert.equal(bowAim({ x: 11, y: 6 }, { x: 10, y: 5 }, full, -1).angle, 135);
   });
 
-  test('power follows the draw: nothing within the slack, 100 at full draw, no more beyond', () => {
+  test('power follows the pull from where the string rests: 0 up to the rest, 100 at full draw, no more beyond', () => {
     const at = (meters) => bowAim({ x: 1, y: 0 }, { x: 0, y: 0 }, meters, 1).power;
     assert.equal(at(0), 0);
-    assert.equal(at(BOW_SLACK), 0);
-    assert.equal(at(BOW_SLACK + (full - BOW_SLACK) / 2), 50);
+    assert.equal(at(BOW_REST), 0, 'grabbing the banana where it waits is no pull');
+    assert.equal(at(BOW_REST + BOW_PULL / 2), 50);
     assert.equal(at(full), 100);
     assert.equal(at(full + 0.4), 100);
-    assert.ok(at(0.12) < BOW_MIN_POWER, 'hands 12 cm apart: letting go, not a shot');
-    assert.ok(at(0.2) > BOW_MIN_POWER, 'hands 20 cm apart: a shot');
+    assert.equal(full, BOW_REST + BOW_PULL);
+    assert.ok(at(BOW_REST + 0.05) < BOW_MIN_POWER, '5 cm past rest: letting go, not a shot');
+    assert.ok(at(BOW_REST + 0.07) > BOW_MIN_POWER, '7 cm past rest: a shot');
   });
 
   test('angle and power come in halves, so a steady draw reads steadily', () => {
@@ -66,7 +69,7 @@ describe('bow mode in prefs, menu and HUD', () => {
       settings: { targetScore: 3, players: [{ name: 'You' }, { name: 'CPU' }] },
     };
     const idle = hudState(game, { local: 0, mode: 'bow' });
-    assert.match(idle.hint, /bow/i);
+    assert.match(idle.hint, /grab the banana/i);
     assert.match(idle.hint, /pull/i);
     assert.equal(idle.lastText, '');
     const drawing = hudState(game, { local: 0, mode: 'bow', drawing: true });
