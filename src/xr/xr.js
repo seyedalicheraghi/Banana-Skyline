@@ -1,5 +1,5 @@
 // XRMode: Banana Skyline in immersive VR (Meta Quest Browser) through three.js WebXR.
-// Owns the rig (camera + controllers), gloves, hand/stick throwing, the VR panels and fades.
+// Owns the rig (camera + controllers), gloves, bow/hand/stick throwing, the VR panels and fades.
 // Contract: docs/DESIGN.md, "XRMode".
 
 import * as THREE from 'three';
@@ -8,12 +8,12 @@ import { BUTTON, XRHand } from './hands.js';
 import { MenuPanel } from './menu.js';
 import { HudPanel, WristPanel } from './panels.js';
 import { Laser } from './pointer.js';
-import { AimArrow, HandBanana } from './props.js';
+import { AimArrow, AimPath, Bow, HandBanana } from './props.js';
 import { Fader, overviewTarget, placeRig, roofTarget, roofYaw } from './rig.js';
 import {
   RUMBLE_DISTANCE, hudState, impactDistance, playerName, rigSpot, winnerPhrase, wristState,
 } from './state.js';
-import { DROP_SPEED, THROW_BOOST, THROW_BOOSTS, ThrowTracker, stickAim } from './throw.js';
+import { BOW_MIN_POWER, DROP_SPEED, THROW_BOOST, THROW_BOOSTS, ThrowTracker, bowAim, stickAim } from './throw.js';
 
 export { DROP_SPEED, THROW_BOOST } from './throw.js';
 
@@ -26,6 +26,8 @@ const HEAD_WAIT_FRAMES = 12;   // frames to wait (black) for the first head pose
 const FOLLOW_RATE = 10;        // rig follows small monkey drops with this damping rate
 const MENU_DISTANCE = 1.6;
 const DEFAULT_EYE = 1.6;
+const PREVIEW_SECONDS = 1.2;   // of the banana's path shown while drawing the bow: enough to judge the distance
+const DRAW_NOTCH = 20;         // power per haptic click while drawing
 const HUD_OFFSET = new THREE.Vector3(-1.3, 2.75, -3.0); // rig-local: ahead, up and a bit left
 // Wrist panel on the back of the off-hand wrist, in WebXR grip space (see hands.js for the axes).
 // Far enough out (x) and up the forearm (y) to clear the glove's back and cuff.
@@ -106,6 +108,7 @@ export class XRMode {
     this.message = null;
     this.lastThrow = [null, null];
     this.held = null;
+    this.draw = null; // bow mode, while the string is pulled: { hand (on the string), bowHand, notch }
     this.tracker = new ThrowTracker();
     this.dominant = 'right';
     this.pointerHand = null;
@@ -139,9 +142,11 @@ export class XRMode {
     return this.session !== null;
   }
 
-  /** Current throw mode from prefs. */
+  /** Current throw mode from prefs: 'bow' (default), 'hand', or 'stick' (which needs a thumbstick). */
   get mode() {
-    if (this.prefs?.vrThrow !== 'stick') return 'hand';
+    const pref = this.prefs?.vrThrow;
+    if (pref === 'bow') return 'bow';
+    if (pref !== 'stick') return 'hand';
     const hands = this.hands?.filter(h => h.connected) ?? [];
     return hands.length && hands.every(h => h.isTrackedHand) ? 'hand' : 'stick';
   }
@@ -212,7 +217,7 @@ export class XRMode {
     if (this.menuOpen && this.active) this.#placeMenu();
   }
 
-  /** Apply preferences (vrThrow: 'hand' | 'stick'). */
+  /** Apply preferences (vrThrow: 'bow' | 'hand' | 'stick'). */
   setPrefs(prefs) {
     if (!prefs || typeof prefs !== 'object') return;
     const before = this.mode;
@@ -220,6 +225,7 @@ export class XRMode {
     this.throwBoost = THROW_BOOSTS[prefs.vrBoost] ?? THROW_BOOST;
     if (this.mode !== before) {
       this.held = null;
+      this.draw = null;
       this.tracker.reset();
     }
   }
@@ -254,6 +260,8 @@ export class XRMode {
       this.laser.dispose();
       this.arrow.dispose();
       this.banana.dispose();
+      this.bow.dispose();
+      this.path.dispose();
     }
     this.rig.removeFromParent();
   }
@@ -270,6 +278,9 @@ export class XRMode {
     this.arrow = new AimArrow();
     this.scene?.add(this.arrow.group);
     this.banana = new HandBanana(() => this.view?.createBananaMesh?.());
+    this.bow = new Bow(() => this.view?.createBananaMesh?.());
+    this.path = new AimPath();
+    this.scene?.add(this.path.group);
     this.built = true;
   }
 
@@ -283,6 +294,7 @@ export class XRMode {
     this.pendingKey = null;
     this.fall = null;
     this.held = null;
+    this.draw = null;
     this.hover = null;
     this.message = null; // this.time only runs in VR: a message from PC play would linger
     this.fader.holdBlack();
@@ -297,6 +309,7 @@ export class XRMode {
     session.removeEventListener('end', this.onSessionEnd);
     this.session = null;
     this.held = null;
+    this.draw = null;
     this.tracker.reset();
     this.fader.reset();
     this.spotKey = null;
@@ -311,6 +324,8 @@ export class XRMode {
       this.laser.hide();
       this.arrow.hide();
       this.banana.hide();
+      this.bow.hide();
+      this.path.hide();
     }
     this.camera.position.set(0, 0, 0);
     if (this.pausedByMenu) {
@@ -342,10 +357,12 @@ export class XRMode {
         this.lastThrow = [null, null];
         this.message = null;
         this.held = null;
+        this.draw = null;
         this.fall = null;
         break;
       case 'turn':
         this.held = null;
+        this.draw = null;
         this.tracker.reset();
         // Pulsed in #update once you can act: in hot seat the rig only reaches the new player after a fade.
         this.turnCue = real && this.active && !p.cpu;
@@ -354,7 +371,9 @@ export class XRMode {
         if (p.player === 0 || p.player === 1) this.lastThrow[p.player] = { angle: p.angle, power: p.power };
         if (p.player === this.localPlayer) {
           this.held = null;
+          this.draw = null;
           this.banana?.hide();
+          this.bow?.loose();
         }
         break;
       case 'impact':
@@ -420,6 +439,7 @@ export class XRMode {
     this.framesInSession += 1;
     if (this.scene && this.rig.parent !== this.scene) this.scene.add(this.rig);
     if (this.scene && this.arrow.group.parent !== this.scene) this.scene.add(this.arrow.group);
+    if (this.scene && this.path.group.parent !== this.scene) this.scene.add(this.path.group);
 
     this.world?.updateWorldMatrix?.(true, false); // world -> scene conversions below need the current scale
     this.fader.update(dt);
@@ -435,6 +455,7 @@ export class XRMode {
     this.#updateTurnCue(game);
     this.#updateBanana(game, mode, dt);
     this.#updateStick(game, mode, dt);
+    this.#updateBow(game, mode, dt);
     this.#updatePanels(game, mode);
     this.#syncPause(game);
   }
@@ -500,6 +521,7 @@ export class XRMode {
     this.spotKey = spot.key;
     this.fall = null;
     this.held = null;
+    this.draw = null;
     this.#safe(() => this.view?.setLocalPlayer?.(this.localPlayer));
     this.#placeHud();
     if (this.menuOpen) this.#placeMenu();
@@ -628,6 +650,7 @@ export class XRMode {
   #toggleMenu() {
     this.menuOpen = !this.menuOpen;
     this.held = null;
+    this.draw = null;
     this.tracker.reset();
     if (this.menuOpen) this.#placeMenu();
     this.#safe(() => this.sfx?.play?.('click'));
@@ -654,6 +677,10 @@ export class XRMode {
       if (kind === 'select' && this.#canAct(game)) this.#stickThrow(game, hand);
       return;
     }
+    if (mode === 'bow') {
+      this.#startDraw(hand, game);
+      return;
+    }
     if (this.held || !this.#canAct(game) || !hand.tracked) return;
     // Whichever hand grabs first becomes the throwing hand from now on.
     this.dominant = hand.handedness === 'left' ? 'left' : 'right';
@@ -665,6 +692,11 @@ export class XRMode {
   }
 
   #onRelease(hand, kind) {
+    if (this.draw?.hand === hand) {
+      if (kind === 'disconnect') this.draw = null;
+      else if (!hand.pressing) this.#loose(hand); // still pulling with the other button otherwise
+      return;
+    }
     if (!this.held || this.held.hand !== hand) return;
     if (kind === 'disconnect') {
       this.held = null;
@@ -673,6 +705,84 @@ export class XRMode {
     }
     if (hand.pressing) return; // still holding with the other button
     this.#release(hand);
+  }
+
+  // --- bow ---------------------------------------------------------------------------------------
+
+  /** Trigger, grip or pinch with either hand takes the string; the other hand holds the bow. */
+  #startDraw(hand, game) {
+    if (this.draw || !this.#canAct(game) || !hand.tracked) return;
+    const bowHand = this.#otherHand(hand);
+    if (!bowHand?.tracked) return;
+    this.dominant = hand.handedness === 'left' ? 'left' : 'right'; // the bow waits in the other hand from now on
+    this.draw = { hand, bowHand, notch: 0 };
+    hand.pulse(0.3, 25);
+  }
+
+  /** Let go of the string: a shot with the drawn angle and power, or nothing for a slack string. */
+  #loose(hand) {
+    const game = this.game;
+    const d = this.draw;
+    this.draw = null;
+    const aim = d && this.#canAct(game) && this.mode === 'bow' ? this.#bowAim(d, game) : null;
+    if (!aim || aim.power < BOW_MIN_POWER) {
+      hand.pulse(0.15, 20);
+      return;
+    }
+    if (game.throwShot({ angle: aim.angle, power: aim.power })) {
+      this.bow.loose();
+      hand.pulse(0.8, 60);
+      d.bowHand.pulse(0.5, 40);
+    }
+  }
+
+  /** Angle and power of the current draw, or null when a hand has no pose. */
+  #bowAim(d, game) {
+    if (!d.hand.tracked || !d.bowHand.tracked) return null;
+    const facing = game.monkeys?.[game.turn]?.facing ?? 1;
+    const bow = this.#toWorldPoint(d.bowHand.grip, _target);
+    const string = this.#toWorldPoint(d.hand.grip, _p);
+    return bowAim({ x: bow.x, y: bow.y }, { x: string.x, y: string.y }, d.hand.grip.position.distanceTo(d.bowHand.grip.position), facing);
+  }
+
+  #otherHand(hand) {
+    for (const h of this.hands) if (h.connected && h !== hand) return h;
+    return null;
+  }
+
+  #updateBow(game, mode, dt) {
+    if (mode !== 'bow' || !this.#canAct(game)) {
+      this.draw = null;
+      this.bow.hide();
+      this.path.hide();
+      return;
+    }
+    let d = this.draw;
+    if (d && (!d.hand.connected || !d.bowHand.connected)) this.draw = d = null;
+    const bowHand = d ? d.bowHand : this.#offHand() ?? this.#dominantHand(); // idle: the bow waits in your off hand
+    if (!bowHand?.tracked) {
+      this.bow.hide();
+      this.path.hide();
+      return;
+    }
+    this.bow.setWorldScale(this.#worldScale());
+    const aim = d ? this.#bowAim(d, game) : null;
+    if (!aim) {
+      this.bow.show(this.rig, bowHand.grip.position, null, dt);
+      this.path.hide();
+      return;
+    }
+    const turn = game.turn;
+    const cur = game.aim[turn];
+    if (!cur || cur.angle !== aim.angle || cur.power !== aim.power) game.setAim(turn, aim.angle, aim.power);
+    const notch = Math.floor(aim.power / DRAW_NOTCH);
+    if (notch > d.notch) d.hand.pulse(0.1 + 0.08 * notch, 12); // the string clicks as it tightens
+    d.notch = notch;
+    this.bow.show(this.rig, bowHand.grip.position, d.hand.grip.position, dt);
+    // The preview shows where letting go now would send the banana, so a slack string shows none.
+    const path = aim.power >= BOW_MIN_POWER ? this.#safe(() => game.previewPath(turn, aim.angle, aim.power, PREVIEW_SECONDS)) : null;
+    if (path && this.world) this.path.show(path, this.world.matrixWorld, PLAYER_COLORS[turn]);
+    else this.path.hide();
   }
 
   #release(hand) {
@@ -693,9 +803,8 @@ export class XRMode {
     }
   }
 
-  /** Record the holding grip in play-plane (world) units: rig-local pose -> scene -> world group. */
-  #sample(hand) {
-    const grip = hand.grip;
+  /** Rig-local pose -> scene -> world group (play-plane units), left in _toWorld. */
+  #rigToWorld() {
     this.rig.updateWorldMatrix(true, false);
     if (this.world) {
       this.world.updateWorldMatrix(true, false);
@@ -703,7 +812,18 @@ export class XRMode {
     } else {
       _toWorld.copy(this.rig.matrixWorld).premultiply(_m.makeScale(1 / VR_SCALE, 1 / VR_SCALE, 1 / VR_SCALE));
     }
-    _p.setFromMatrixPosition(grip.matrix).applyMatrix4(_toWorld);
+    return _toWorld;
+  }
+
+  /** A grip's position in play-plane (world) units. */
+  #toWorldPoint(grip, target) {
+    return target.setFromMatrixPosition(grip.matrix).applyMatrix4(this.#rigToWorld());
+  }
+
+  /** Record the holding grip in play-plane (world) units. */
+  #sample(hand) {
+    const grip = hand.grip;
+    this.#toWorldPoint(grip, _p);
     let vx = null;
     let vy = null;
     if (grip.hasLinearVelocity && grip.linearVelocity) {
@@ -809,7 +929,7 @@ export class XRMode {
     if (this.menu.visible) this.menu.draw({ mode, inMatch: real, boost: this.prefs?.vrBoost ?? 'normal' }, hoverOn(this.menu));
     if (this.hud.visible) {
       this.hud.draw(hudState(game, {
-        local: this.localPlayer, hotSeat: this.hotSeat, mode, lastThrow: this.lastThrow, message: this.message,
+        local: this.localPlayer, hotSeat: this.hotSeat, mode, drawing: Boolean(this.draw), lastThrow: this.lastThrow, message: this.message,
       }), hoverOn(this.hud));
     }
 
@@ -898,9 +1018,10 @@ export class XRMode {
         this.#safe(() => this.deps.setPrefs(next));
         break;
       }
+      case 'throw-bow':
       case 'throw-hand':
       case 'throw-stick': {
-        const next = { ...prefs, vrThrow: id === 'throw-stick' ? 'stick' : 'hand' };
+        const next = { ...prefs, vrThrow: id.slice('throw-'.length) };
         this.setPrefs(next);
         this.#safe(() => this.deps.setPrefs(next));
         break;

@@ -55,11 +55,14 @@ export function formatShot(shot) {
  * @param {object} o
  * @param {?number} o.local the player you are standing in (null in the overview)
  * @param {boolean} o.hotSeat
- * @param {'hand'|'stick'} o.mode throw mode
+ * @param {'bow'|'hand'|'stick'} o.mode throw mode
+ * @param {boolean} o.drawing bow mode: the string is being pulled (the aim readout is live)
  * @param {Array<?{angle:number,power:number}>} o.lastThrow last throw of each player this round
  * @param {?{text:string, color:string}} o.message transient message
  */
-export function hudState(game, { local = null, hotSeat = false, mode = 'hand', lastThrow = [null, null], message = null } = {}) {
+export function hudState(game, {
+  local = null, hotSeat = false, mode = 'hand', drawing = false, lastThrow = [null, null], message = null,
+} = {}) {
   const names = [playerName(game, 0), playerName(game, 1)];
   const turn = game?.turn === 1 ? 1 : 0;
   const cur = game?.monkeys?.[turn];
@@ -79,7 +82,9 @@ export function hudState(game, { local = null, hotSeat = false, mode = 'hand', l
       turnColor = '#ffe066';
       hint = mode === 'stick'
         ? 'Stick up/down: angle · left/right: power · trigger throws'
-        : 'Grab the banana, swing and let go';
+        : mode === 'bow'
+          ? 'Bow in one hand · pull the banana back with the other · let go'
+          : 'Grab the banana, swing and let go';
     } else {
       turnText = /^you$/i.test(cur.name) ? 'Your turn' : `${cur.name}'s turn`;
     }
@@ -92,7 +97,8 @@ export function hudState(game, { local = null, hotSeat = false, mode = 'hand', l
   const who = local ?? turn;
   const shot = lastThrow?.[who] ?? game?.lastShots?.[who] ?? null;
   let lastText = '';
-  if (myTurn && mode === 'stick' && phase === 'aim' && game?.aim?.[turn]) {
+  const live = mode === 'stick' || (mode === 'bow' && drawing);
+  if (myTurn && live && phase === 'aim' && game?.aim?.[turn]) {
     lastText = `Aim: ${formatShot(game.aim[turn])}`;
   } else if (shot) {
     const owner = local != null ? 'Your' : `${names[who]}'s`;
