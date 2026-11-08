@@ -43,7 +43,7 @@ export const ASSIST_OPTIONS = [
 ];
 
 export const DEFAULT_UI_PREFS = Object.freeze({
-  theme: 'night', sound: true, volume: 0.8, assist: 'arrow', vrThrow: 'hand', lastSettings: null,
+  theme: 'night', sound: true, volume: 0.8, assist: 'arrow', vrThrow: 'bow', lastSettings: null,
 });
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));

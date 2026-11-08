@@ -248,7 +248,16 @@ const xr = new XRMode({ renderer, scene, world, view, sfx, getPrefs, setPrefs, s
   turn it is. Demo/menu: a floating overview spot in front of the city. `view.setLocalPlayer(i)`
   hides the monkey you are standing in.
 - Hands: simple monkey-glove models on both controllers (no downloaded controller models).
-- Throw ("hand" mode, default): on your turn a banana (`view.createBananaMesh()`) appears in your
+- Throw ("bow" mode, default, `prefs.vrThrow`): on your turn a bow (`props.js` `Bow`, real size, a rig
+  child) sits in your off hand with the banana on the string. Trigger, grip or pinch with either hand
+  takes the string (that hand is the string hand, the other holds the bow). While drawing,
+  `throw.js` `bowAim`: direction string hand → bow hand in the play plane is the angle (0..180 toward the
+  opponent), the distance between the hands in real meters is the power (`BOW_SLACK` 6 cm → 0,
+  `BOW_FULL_DRAW` 55 cm → 100), both in halves; `game.setAim` follows it and `AimPath` draws
+  `game.previewPath(…, 1.2 s)` in world coordinates (where letting go now would send it). Letting go
+  calls `game.throwShot` (method `'aim'`); below `BOW_MIN_POWER` (15) it is a let-go, no shot. Haptic
+  clicks every 20 power while drawing.
+- Throw ("hand" mode): on your turn a banana (`view.createBananaMesh()`) appears in your
   dominant hand while you hold trigger or grip; swing and release. Release velocity = controller
   linear velocity (prefer `XRPose.linearVelocity`, else smoothed finite differences over the last
   ~80 ms, peak-weighted), converted from scene to world units (÷ `VR_SCALE`), only the components in
@@ -257,6 +266,7 @@ const xr = new XRMode({ renderer, scene, world, view, sfx, getPrefs, setPrefs, s
   than a small threshold (dropped banana → put it back in the hand).
 - Throw ("stick" mode): thumbstick Y = angle (push up to raise it), X = power, show the aim arrow, A/X or trigger throws.
 - VR panels (canvas textures on planes, readable at ~1.5–2 m): menu (vs CPU easy/normal/hard,
-  2 players, throw mode, exit VR) usable with a controller laser + trigger; HUD (names, scores,
-  wind arrow, turn, last throw angle/power, messages). Keep text large and high-contrast.
+  2 players, throw mode bow/hand/stick, hand-throw boost, exit VR) usable with a controller laser +
+  trigger; HUD (names, scores, wind arrow, turn, live aim while drawing the bow or in stick mode,
+  last throw angle/power, messages). Keep text large and high-contrast.
 - Comfort: no smooth locomotion, fades for rig moves, no camera shake in VR.

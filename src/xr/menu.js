@@ -4,7 +4,7 @@ import { CanvasPanel, COLORS, drawButton, drawCard, drawText } from './panels.js
 
 /** Button ids the menu can emit. */
 export const MENU_ACTIONS = [
-  'cpu-easy', 'cpu-normal', 'cpu-hard', 'two-players', 'throw-hand', 'throw-stick',
+  'cpu-easy', 'cpu-normal', 'cpu-hard', 'two-players', 'throw-bow', 'throw-hand', 'throw-stick',
   'boost-low', 'boost-normal', 'boost-high', 'resume', 'quit', 'exit',
 ];
 
@@ -15,7 +15,7 @@ export class MenuPanel extends CanvasPanel {
 
   /**
    * @param {object} s
-   * @param {'hand'|'stick'} s.mode current throw mode
+   * @param {'bow'|'hand'|'stick'} s.mode current throw mode
    * @param {boolean} s.inMatch a real match is running (offer Resume / Quit to title)
    * @param {'low'|'normal'|'high'} s.boost hand-throw boost
    * @param {?string} hover hovered button id
@@ -39,13 +39,19 @@ export class MenuPanel extends CanvasPanel {
       const two = this.addButton('two-players', m, 324, full, 112);
       drawButton(ctx, { ...two, label: '2 Players', sub: 'pass the headset', hover: hover === 'two-players', px: 50 });
 
-      const hw = (full - gap) / 2;
-      const hand = this.addButton('throw-hand', m, 460, hw, 112);
-      drawButton(ctx, { ...hand, label: 'Throw: Hand', sub: 'swing and let go', hover: hover === 'throw-hand', selected: s.mode !== 'stick', px: 44 });
-      const stick = this.addButton('throw-stick', m + hw + gap, 460, hw, 112);
-      drawButton(ctx, { ...stick, label: 'Throw: Stick', sub: 'thumbstick + trigger', hover: hover === 'throw-stick', selected: s.mode === 'stick', px: 44 });
+      drawText(ctx, 'Throw', W / 2, 456, { px: 32, color: COLORS.dim });
+      const throws = [
+        ['throw-bow', 'Bow', 'pull back, let go', s.mode === 'bow'],
+        ['throw-hand', 'Hand', 'swing and let go', s.mode === 'hand'],
+        ['throw-stick', 'Stick', 'thumbstick + trigger', s.mode === 'stick'],
+      ];
+      throws.forEach(([id, label, sub, selected], i) => {
+        const r = this.addButton(id, m + i * (bw + gap), 474, bw, 104);
+        drawButton(ctx, { ...r, label, sub, hover: hover === id, selected, px: 44 });
+      });
 
-      drawText(ctx, 'Throw boost (bananas fall short? pick High)', W / 2, 604, { px: 32, color: COLORS.dim, maxWidth: full });
+      const hw = (full - gap) / 2;
+      drawText(ctx, 'Hand throw boost (bananas fall short? pick High)', W / 2, 606, { px: 32, color: COLORS.dim, maxWidth: full });
       [['boost-low', 'Low'], ['boost-normal', 'Normal'], ['boost-high', 'High']].forEach(([id, label], i) => {
         const r = this.addButton(id, m + i * (bw + gap), 628, bw, 84);
         drawButton(ctx, { ...r, label, hover: hover === id, selected: (s.boost ?? 'normal') === id.slice('boost-'.length), px: 42 });

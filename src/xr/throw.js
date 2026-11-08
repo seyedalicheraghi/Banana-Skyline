@@ -21,6 +21,12 @@ export const FIT_SECONDS = 0.075;
  */
 export const MIN_SEGMENT_SECONDS = 0.004;
 
+/** Bow (two-handed throw), in real meters: the string gives for the first centimeters, full power at this draw. */
+export const BOW_SLACK = 0.06;
+export const BOW_FULL_DRAW = 0.55;
+/** A draw weaker than this (hands closer than ~13 cm) is letting go of the string, not a shot. */
+export const BOW_MIN_POWER = 15;
+
 /** Thumbstick aiming: deadzone and rates at full deflection (degrees/s and power/s). */
 export const STICK_DEADZONE = 0.18;
 export const STICK_ANGLE_RATE = 45;
@@ -162,6 +168,26 @@ export function leastSquaresVelocity(list) {
   }
   if (stt < 1e-12) return null;
   return { vx: stx / stt, vy: sty / stt };
+}
+
+/**
+ * Aim of a bow draw. The string hand pulls the banana back, so it flies from the string hand toward the
+ * bow hand: that direction, in the play plane, is the angle; the distance between the hands (all three
+ * axes, real meters) is the power. Both are rounded to halves, so a steady draw gives a steady readout.
+ * @param {{x:number, y:number}} bow bow hand in play-plane (world) units
+ * @param {{x:number, y:number}} string string hand in play-plane units
+ * @param {number} drawMeters distance between the hands
+ * @param {number} facing +1 / -1
+ * @returns {{angle:number, power:number}} angle 0..180 degrees toward the opponent, power 0..100
+ */
+export function bowAim(bow, string, drawMeters, facing) {
+  const dx = (Number(bow?.x) || 0) - (Number(string?.x) || 0);
+  const dy = (Number(bow?.y) || 0) - (Number(string?.y) || 0);
+  const raw = Math.atan2(dy, dx * (facing < 0 ? -1 : 1)) * (180 / Math.PI);
+  const angle = clamp(Number.isFinite(raw) ? raw : 0, 0, 180);
+  const pull = Math.max(0, (Number(drawMeters) || 0) - BOW_SLACK);
+  const power = clamp(pull / (BOW_FULL_DRAW - BOW_SLACK), 0, 1) * 100;
+  return { angle: Math.round(angle * 2) / 2, power: Math.round(power * 2) / 2 };
 }
 
 /** Deadzone plus a quadratic response: fine control near the center, full rate at the edge. */

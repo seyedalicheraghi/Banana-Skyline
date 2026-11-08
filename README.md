@@ -64,9 +64,9 @@ Controls in VR:
 
 | Do this | To |
 |---|---|
-| On your turn, hold the trigger (or grip) near the glowing banana, swing your arm and let go | throw |
+| On your turn a bow appears in one hand. Pull the trigger (or grip, or pinch) with the other hand anywhere, pull it back like a bowstring, and let go | throw: the bow's direction is the angle, how far you pull is the power, and dots show where the banana will go |
 | Point at a panel and pull the trigger | press a button |
-| B or Y, or the Menu button on the scoreboard | open/close the menu: Throw: Stick aims with the thumbstick instead; Throw boost High helps if your bananas fall short |
+| B or Y, or the Menu button on the scoreboard | open/close the menu: Throw: Hand throws by swinging the banana, Throw: Stick aims with the thumbstick; Throw boost High helps if hand throws fall short |
 | A or X | rematch when a match is over |
 
 Try VR mode without a headset: open <http://localhost:8080/?emulate> (uses Meta's WebXR emulator, a dev

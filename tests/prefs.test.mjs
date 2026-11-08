@@ -1,6 +1,6 @@
 import { test, describe, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFAULT_PREFS, loadPrefs, sanitizePrefs, savePrefs } from '../src/app/prefs.js';
+import { DEFAULT_PREFS, loadPrefs, migratePrefs, sanitizePrefs, savePrefs } from '../src/app/prefs.js';
 
 const DEFAULTS = { ...DEFAULT_PREFS };
 const ORIGINAL = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
@@ -32,7 +32,7 @@ describe('sanitizePrefs', () => {
     assert.deepEqual(sanitizePrefs(), DEFAULTS);
     assert.deepEqual(sanitizePrefs({}), DEFAULTS);
     assert.deepEqual(DEFAULTS, {
-      theme: 'night', sound: true, volume: 0.8, assist: 'arrow', vrThrow: 'hand', vrBoost: 'normal', lastSettings: null,
+      theme: 'night', sound: true, volume: 0.8, assist: 'arrow', vrThrow: 'bow', vrBoost: 'normal', lastSettings: null,
     });
   });
 
@@ -44,7 +44,7 @@ describe('sanitizePrefs', () => {
     assert.deepEqual(sanitizePrefs(p), p);
     for (const theme of ['night', 'sunset', 'classic']) assert.equal(sanitizePrefs({ theme }).theme, theme);
     for (const assist of ['off', 'arrow', 'preview']) assert.equal(sanitizePrefs({ assist }).assist, assist);
-    for (const vrThrow of ['hand', 'stick']) assert.equal(sanitizePrefs({ vrThrow }).vrThrow, vrThrow);
+    for (const vrThrow of ['bow', 'hand', 'stick']) assert.equal(sanitizePrefs({ vrThrow }).vrThrow, vrThrow);
   });
 
   test('replaces unknown choices with the defaults', () => {
@@ -99,6 +99,26 @@ describe('loadPrefs / savePrefs', () => {
     const [[, raw]] = [...storage.data];
     assert.deepEqual(JSON.parse(raw), prefs, 'stored as JSON');
     assert.deepEqual(loadPrefs(), prefs);
+  });
+
+  test('v1 prefs are read when there are no v2 ones: hand (the old default) becomes bow, stick stays', () => {
+    const storage = memoryStorage();
+    installStorage(storage);
+    const v1 = { theme: 'sunset', sound: false, volume: 0.5, assist: 'preview', vrThrow: 'hand', vrBoost: 'high', lastSettings: { targetScore: 5 } };
+    storage.data.set('banana-skyline.prefs.v1', JSON.stringify(v1));
+    assert.deepEqual(loadPrefs(), { ...v1, vrThrow: 'bow' });
+    storage.data.set('banana-skyline.prefs.v1', JSON.stringify({ ...v1, vrThrow: 'stick' }));
+    assert.deepEqual(loadPrefs(), { ...v1, vrThrow: 'stick' });
+    assert.deepEqual(migratePrefs({ vrThrow: 'bow' }), { vrThrow: 'bow' });
+    assert.deepEqual(migratePrefs(null), { vrThrow: 'bow' });
+    // Once saved (v2), the stored choice wins, whatever v1 says.
+    savePrefs({ ...v1, vrThrow: 'hand' });
+    assert.equal(storage.data.size, 2, 'v1 is left alone');
+    assert.equal(loadPrefs().vrThrow, 'hand');
+    storage.data.set('banana-skyline.prefs.v1', 'not json');
+    assert.equal(loadPrefs().vrThrow, 'hand');
+    storage.data.delete('banana-skyline.prefs.v2');
+    assert.deepEqual(loadPrefs(), DEFAULTS, 'broken v1 gives defaults');
   });
 
   test('save sanitizes before storing', () => {

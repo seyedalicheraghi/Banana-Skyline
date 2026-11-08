@@ -8,7 +8,7 @@ import * as THREE from 'three';
 import { BUILDING_DEPTH, CITY_WIDTH, MAX_POWER, VR_SCALE } from '../src/core/constants.js';
 import { Game } from '../src/core/game.js';
 import { THROW_BOOST, XRMode } from '../src/xr/xr.js';
-import { THROW_BOOSTS } from '../src/xr/throw.js';
+import { BOW_MIN_POWER, THROW_BOOSTS, bowAim } from '../src/xr/throw.js';
 import { MISS } from './helpers.mjs';
 import {
   FRAME, FakeWebXRManager, FakeXRSystem, TEST_SEED, buttonCenter, createXRApp, headInScene, installXREnv,
@@ -597,8 +597,7 @@ describe('XRMode hand throw', () => {
     const bp = banana.getWorldPosition(new THREE.Vector3());
     const gp = grip.getWorldPosition(new THREE.Vector3());
     assert.ok(bp.y > gp.y && bp.distanceTo(gp) < 0.3, 'just above the right hand');
-    assert.equal(app.view.bananas.length, 1, 'the banana mesh comes from view.createBananaMesh()');
-    assert.ok(isUnder(app.view.bananas[0].mesh, banana));
+    assert.ok(app.view.bananas.some((b) => isUnder(b.mesh, banana)), 'the banana mesh comes from view.createBananaMesh()');
 
     app.frame(FRAME, () => app.manager.fire(0, 'selectstart'));
     assert.equal(isUnder(banana, grip), true, 'in the fist');
@@ -914,6 +913,179 @@ describe('XRMode robustness', () => {
     app.run(5);
     xr.update(FRAME, {}, app.game);
     other.dispose();
+    assertQuiet();
+  });
+});
+
+describe('XRMode bow mode', () => {
+  const BOW = { vrThrow: 'bow', lastSettings: null };
+  async function myTurn(options = {}) {
+    const app = createXRApp(env, { prefs: BOW, ...options });
+    app.startDemo();
+    await enterVR(app, options);
+    startVsCpu(app);
+    untilMyTurn(app);
+    return app;
+  }
+  const ahead = (p) => p.clone().add(new THREE.Vector3(0, 0, -1));
+  /** Hold the bow at `bowAt` and take the string at `stringAt` (rig-local), then hold the pull for `frames`. */
+  function pull(app, { bowSlot = 1, stringSlot = 0, bowAt, stringAt, frames = 4, button = 'select' }) {
+    app.manager.pose(bowSlot, { position: bowAt, lookAt: ahead(bowAt) });
+    app.frame(FRAME, () => {
+      app.manager.pose(stringSlot, { position: stringAt, lookAt: ahead(stringAt) });
+      app.manager.fire(stringSlot, `${button}start`);
+    });
+    app.run(frames);
+  }
+  /** Let go of the string; returns the 'throw' events that caused. */
+  function letGo(app, { stringSlot = 0, button = 'select' } = {}) {
+    const mark = app.events.length;
+    app.frame(FRAME, () => app.manager.fire(stringSlot, `${button}end`));
+    return app.eventsOf('throw', mark);
+  }
+  /** Bow hand ahead and above, string hand back near the chest: 40 cm forward, 20 cm up, 20 cm across. */
+  function stance(app) {
+    return {
+      bowAt: new THREE.Vector3(app.head.x - 0.1, 1.45, app.head.z - 0.55),
+      stringAt: new THREE.Vector3(app.head.x + 0.1, 1.25, app.head.z - 0.15),
+    };
+  }
+
+  test('the bow is the default; the menu switches to hand and back and saves it', async () => {
+    const app = await myTurn();
+    assert.equal(app.xr.mode, 'bow');
+    tap(app, 0, BUTTON.b);
+    assert.ok(app.xr.menu.buttons.some((b) => b.id === 'throw-bow'), 'Throw: Bow button');
+    clickButton(app, app.xr.menu, 'throw-hand');
+    assert.equal(app.prefs.vrThrow, 'hand');
+    assert.equal(app.xr.mode, 'hand');
+    clickButton(app, app.xr.menu, 'throw-bow');
+    assert.equal(app.prefs.vrThrow, 'bow');
+    assert.equal(app.xr.mode, 'bow');
+    tap(app, 0, BUTTON.b);
+    assertQuiet();
+  });
+
+  test('on your turn the bow waits in your off hand with the banana on the string', async () => {
+    const app = await myTurn();
+    const bow = app.xr.bow;
+    assert.equal(bow.group.visible, true);
+    assert.ok(isUnder(bow.group, app.xr.rig), 'a rig child, like the hands');
+    const left = app.manager.getControllerGrip(1);
+    assert.ok(bow.group.position.distanceTo(left.position) < 1e-6, 'at the left (off) hand');
+    assert.equal(bow.nock.visible, true);
+    assert.ok(isUnder(bow.banana.mesh, bow.nock), 'the banana rides on the string');
+    assert.ok(app.view.bananas.some((b) => b.mesh === bow.banana.mesh), 'the bow got its banana from the view');
+    assert.equal(app.xr.banana.root.visible, false, 'no hand-throw banana');
+    assert.equal(app.xr.path.group.visible, false, 'no preview until you draw');
+    assert.ok(app.xr.hud.canvas.texts.some((t) => /pull the banana back/.test(t)), 'the HUD explains the bow');
+    assertQuiet();
+  });
+
+  test('pulling the string aims the shot (angle from the hands, power from the draw) with a path preview; letting go shoots', async () => {
+    const app = await myTurn();
+    const game = app.game;
+    const { bowAt, stringAt } = stance(app);
+    pull(app, { bowAt, stringAt });
+    assert.ok(app.xr.draw, 'drawing');
+    // Rig -z is toward the opponent: 0.4 forward and 0.2 up; the draw is the full distance between the hands.
+    const expected = bowAim({ x: 0.4, y: 0.2 }, { x: 0, y: 0 }, bowAt.distanceTo(stringAt), 1);
+    assert.ok(expected.angle > 24 && expected.angle < 29, `angle ${expected.angle}`);
+    assert.ok(expected.power > 84 && expected.power < 92, `power ${expected.power}`);
+    assert.deepEqual(game.aim[0], expected, 'the game aim follows the draw');
+    assert.ok(app.xr.hud.canvas.texts.some((t) => t.startsWith('Aim:')), 'HUD shows the live aim');
+
+    const bow = app.xr.bow;
+    assert.equal(bow.drawing, true);
+    assert.ok(bow.group.position.distanceTo(bowAt) < 1e-6, 'the bow is in the bow hand');
+    const nock = bow.nock.getWorldPosition(new THREE.Vector3());
+    const string = app.manager.getControllerGrip(0).getWorldPosition(new THREE.Vector3());
+    assert.ok(nock.distanceTo(string) < 0.01, `the nock follows the string hand (${nock.distanceTo(string).toFixed(3)} m off)`);
+    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(bow.group.quaternion);
+    assert.ok(forward.angleTo(bowAt.clone().sub(stringAt)) < 1e-3, 'the bow points along the pull');
+
+    const path = app.xr.path;
+    assert.equal(path.group.visible, true, 'preview shown');
+    // The preview ends where the banana would land: in this city that is the building in front of you.
+    const points = game.previewPath(0, expected.angle, expected.power, 1.2);
+    assert.equal(path.dots.count, Math.min(48, points.length - 1), 'one dot per preview point (up to 48)');
+    assert.ok(path.dots.count >= 1);
+    const first = new THREE.Vector3().setFromMatrixPosition(new THREE.Matrix4().fromArray(path.dots.instanceMatrix.array, 0));
+    const hand = game.handPosition(0);
+    assert.ok(first.x > hand.x && first.x < hand.x + 6 && first.y > hand.y, `the preview leaves the hand toward the opponent (${first.x.toFixed(1)}, ${first.y.toFixed(1)})`);
+    assert.ok(path.group.matrixWorld.equals(app.world.matrixWorld), 'drawn in world coordinates');
+
+    const throws = letGo(app);
+    assert.equal(throws.length, 1, 'one shot');
+    const t = throws[0].payload;
+    assert.equal(t.method, 'aim');
+    assert.equal(t.player, 0);
+    assert.equal(t.angle, expected.angle);
+    assert.equal(t.power, expected.power);
+    assert.deepEqual(app.throwCalls, [], 'not a velocity throw');
+    assert.equal(game.phase, 'flight');
+    assert.equal(app.xr.draw, null);
+    app.frame();
+    assert.equal(bow.group.visible, false, 'bow gone while the banana flies');
+    assert.equal(path.group.visible, false);
+    assertQuiet();
+  });
+
+  test('a slack string is let go without a shot; the bow stays and a real draw follows', async () => {
+    const app = await myTurn();
+    const game = app.game;
+    const { bowAt, stringAt } = stance(app);
+    const close = bowAt.clone().add(new THREE.Vector3(0.04, -0.04, 0.08)); // 10 cm apart
+    pull(app, { bowAt, stringAt: close });
+    assert.ok(app.xr.draw, 'the string is taken');
+    assert.ok(game.aim[0].power < BOW_MIN_POWER, `power ${game.aim[0].power}`);
+    assert.equal(app.xr.path.group.visible, false, 'no preview: letting go would not shoot');
+    assert.deepEqual(letGo(app), [], 'no shot');
+    assert.equal(game.phase, 'aim');
+    assert.equal(game.turn, 0);
+    app.frame();
+    assert.equal(app.xr.bow.group.visible, true, 'the bow is still offered');
+    assert.equal(app.xr.bow.drawing, false);
+    pull(app, { bowAt, stringAt, button: 'squeeze' }); // the grip works too
+    assert.equal(letGo(app, { button: 'squeeze' }).length, 1, 'the grip shoots as well');
+    assertQuiet();
+  });
+
+  test('with tracked hands, a pinch of either hand takes the string and the other hand holds the bow', async () => {
+    const app = await myTurn({ hands: true });
+    assert.equal(app.xr.mode, 'bow');
+    const bowAt = new THREE.Vector3(app.head.x + 0.15, 1.45, app.head.z - 0.55);
+    const stringAt = new THREE.Vector3(app.head.x - 0.1, 1.2, app.head.z - 0.1);
+    pull(app, { bowSlot: 0, stringSlot: 1, bowAt, stringAt }); // left hand pinches
+    assert.equal(app.xr.draw?.hand, app.xr.hands[1]);
+    assert.equal(app.xr.draw?.bowHand, app.xr.hands[0]);
+    assert.ok(app.xr.bow.group.position.distanceTo(bowAt) < 1e-6, 'the bow moved to the right hand');
+    const throws = letGo(app, { stringSlot: 1 });
+    assert.equal(throws.length, 1);
+    assert.equal(throws[0].payload.method, 'aim');
+    assert.equal(app.xr.dominant, 'left', 'the pinching hand throws from now on');
+    assertQuiet();
+  });
+
+  test('the bow goes away with the menu and on the CPU turn, when pulling does nothing', async () => {
+    const app = await myTurn();
+    const game = app.game;
+    tap(app, 0, BUTTON.b);
+    assert.equal(app.xr.menu.visible, true);
+    assert.equal(app.xr.bow.group.visible, false, 'no bow behind the menu');
+    tap(app, 0, BUTTON.b);
+    app.frame();
+    assert.equal(app.xr.bow.group.visible, true);
+
+    assert.equal(game.throwShot(MISS), true);
+    app.runUntil(() => game.turn === 1 && game.phase === 'aim', { label: 'CPU turn' });
+    app.frame();
+    assert.equal(app.xr.bow.group.visible, false, 'no bow on the CPU turn');
+    const { bowAt, stringAt } = stance(app);
+    pull(app, { bowAt, stringAt });
+    assert.equal(app.xr.draw, null);
+    assert.deepEqual(letGo(app), []);
+    assert.equal(game.turn, 1);
     assertQuiet();
   });
 });
