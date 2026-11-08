@@ -13,7 +13,8 @@ import { Fader, overviewTarget, placeRig, roofTarget, roofYaw } from './rig.js';
 import {
   RUMBLE_DISTANCE, hudState, impactDistance, playerName, rigSpot, winnerPhrase, wristState,
 } from './state.js';
-import { BOW_MIN_POWER, DROP_SPEED, THROW_BOOST, THROW_BOOSTS, ThrowTracker, bowAim, stickAim } from './throw.js';
+import { BOW_GRAB_RADIUS, BOW_MIN_POWER, DROP_SPEED, THROW_BOOST, THROW_BOOSTS, ThrowTracker, bowAim, stickAim } from './throw.js';
+import { launchVelocity } from '../core/physics.js';
 
 export { DROP_SPEED, THROW_BOOST } from './throw.js';
 
@@ -26,7 +27,8 @@ const HEAD_WAIT_FRAMES = 12;   // frames to wait (black) for the first head pose
 const FOLLOW_RATE = 10;        // rig follows small monkey drops with this damping rate
 const MENU_DISTANCE = 1.6;
 const DEFAULT_EYE = 1.6;
-const PREVIEW_SECONDS = 1.2;   // of the banana's path shown while drawing the bow: enough to judge the distance
+const PREVIEW_MIN = 1.2;       // seconds of the banana's path shown while drawing the bow: at least this,
+const PREVIEW_MAX = 6;         // up to just past the top of the arc, never more than this
 const DRAW_NOTCH = 20;         // power per haptic click while drawing
 const HUD_OFFSET = new THREE.Vector3(-1.3, 2.75, -3.0); // rig-local: ahead, up and a bit left
 // Wrist panel on the back of the off-hand wrist, in WebXR grip space (see hands.js for the axes).
@@ -108,7 +110,9 @@ export class XRMode {
     this.message = null;
     this.lastThrow = [null, null];
     this.held = null;
-    this.draw = null; // bow mode, while the string is pulled: { hand (on the string), bowHand, notch }
+    this.draw = null; // bow mode, while the string is pulled: { hand (on the string), bowHand, notch, aim, stringPos, before }
+    this.bowHand = null; // bow mode: the hand the bow is shown in this frame
+    this.previewKey = null;
     this.tracker = new ThrowTracker();
     this.dominant = 'right';
     this.pointerHand = null;
@@ -709,13 +713,29 @@ export class XRMode {
 
   // --- bow ---------------------------------------------------------------------------------------
 
-  /** Trigger, grip or pinch with either hand takes the string; the other hand holds the bow. */
+  /**
+   * Trigger, grip or pinch near the banana on the string takes the string; the other hand keeps the bow.
+   * The same press by the hand holding the bow hands the bow over instead (for the other-handed).
+   */
   #startDraw(hand, game) {
-    if (this.draw || !this.#canAct(game) || !hand.tracked) return;
-    const bowHand = this.#otherHand(hand);
-    if (!bowHand?.tracked) return;
+    if (this.draw || !this.#canAct(game) || !hand.tracked || !this.bow.group.visible) return;
+    if (hand === this.bowHand) {
+      this.dominant = hand.handedness === 'left' ? 'left' : 'right'; // the bow moves to the other hand
+      hand.pulse(0.2, 20);
+      return;
+    }
+    const bowHand = this.bowHand ?? this.#otherHand(hand);
+    if (!bowHand?.tracked || bowHand === hand) return;
+    if (this.bow.nockAt(_p).distanceTo(hand.grip.position) > BOW_GRAB_RADIUS) return; // reach for the banana
     this.dominant = hand.handedness === 'left' ? 'left' : 'right'; // the bow waits in the other hand from now on
-    this.draw = { hand, bowHand, notch: 0 };
+    const turn = game.turn;
+    this.draw = {
+      hand, bowHand, notch: 0,
+      aim: null,                                             // last good reading, for a release without a pose
+      stringPos: new THREE.Vector3().copy(hand.grip.position), // last good string-hand position (rig-local)
+      before: game.aim?.[turn] ? { ...game.aim[turn] } : null, // put back when the string is let go
+    };
+    this.previewKey = null;
     hand.pulse(0.3, 25);
   }
 
@@ -724,8 +744,10 @@ export class XRMode {
     const game = this.game;
     const d = this.draw;
     this.draw = null;
-    const aim = d && this.#canAct(game) && this.mode === 'bow' ? this.#bowAim(d, game) : null;
+    const live = Boolean(d) && this.#canAct(game) && this.mode === 'bow';
+    const aim = live ? this.#bowAim(d, game) ?? d.aim : null; // no pose this very frame: shoot what was shown
     if (!aim || aim.power < BOW_MIN_POWER) {
+      if (live && d.before) game.setAim(game.turn, d.before.angle, d.before.power); // a let-go changes nothing
       hand.pulse(0.15, 20);
       return;
     }
@@ -736,13 +758,14 @@ export class XRMode {
     }
   }
 
-  /** Angle and power of the current draw, or null when a hand has no pose. */
+  /** Angle and power of the current draw, or null when a hand has no pose this frame. */
   #bowAim(d, game) {
     if (!d.hand.tracked || !d.bowHand.tracked) return null;
     const facing = game.monkeys?.[game.turn]?.facing ?? 1;
     const bow = this.#toWorldPoint(d.bowHand.grip, _target);
     const string = this.#toWorldPoint(d.hand.grip, _p);
-    return bowAim({ x: bow.x, y: bow.y }, { x: string.x, y: string.y }, d.hand.grip.position.distanceTo(d.bowHand.grip.position), facing);
+    const draw = Math.hypot(bow.x - string.x, bow.y - string.y) * this.#worldScale(); // in the play plane, real meters
+    return bowAim({ x: bow.x, y: bow.y }, { x: string.x, y: string.y }, draw, facing);
   }
 
   #otherHand(hand) {
@@ -753,6 +776,7 @@ export class XRMode {
   #updateBow(game, mode, dt) {
     if (mode !== 'bow' || !this.#canAct(game)) {
       this.draw = null;
+      this.bowHand = null;
       this.bow.hide();
       this.path.hide();
       return;
@@ -760,27 +784,53 @@ export class XRMode {
     let d = this.draw;
     if (d && (!d.hand.connected || !d.bowHand.connected)) this.draw = d = null;
     const bowHand = d ? d.bowHand : this.#offHand() ?? this.#dominantHand(); // idle: the bow waits in your off hand
-    if (!bowHand?.tracked) {
+    this.bowHand = bowHand?.tracked ? bowHand : null;
+    if (!this.bowHand) {
       this.bow.hide();
       this.path.hide();
       return;
     }
     this.bow.setWorldScale(this.#worldScale());
-    const aim = d ? this.#bowAim(d, game) : null;
-    if (!aim) {
+    if (!d) {
       this.bow.show(this.rig, bowHand.grip.position, null, dt);
       this.path.hide();
       return;
     }
+    const aim = this.#bowAim(d, game);
+    if (aim) {
+      d.aim = aim;
+      d.stringPos.copy(d.hand.grip.position);
+    }
+    // A hand without a pose this frame keeps the last reading: the draw, the preview and the HUD stay put.
+    this.bow.show(this.rig, bowHand.grip.position, d.stringPos, dt);
+    if (!d.aim) return;
     const turn = game.turn;
     const cur = game.aim[turn];
-    if (!cur || cur.angle !== aim.angle || cur.power !== aim.power) game.setAim(turn, aim.angle, aim.power);
-    const notch = Math.floor(aim.power / DRAW_NOTCH);
+    if (!cur || cur.angle !== d.aim.angle || cur.power !== d.aim.power) game.setAim(turn, d.aim.angle, d.aim.power);
+    const notch = Math.floor(d.aim.power / DRAW_NOTCH);
     if (notch > d.notch) d.hand.pulse(0.1 + 0.08 * notch, 12); // the string clicks as it tightens
     d.notch = notch;
-    this.bow.show(this.rig, bowHand.grip.position, d.hand.grip.position, dt);
-    // The preview shows where letting go now would send the banana, so a slack string shows none.
-    const path = aim.power >= BOW_MIN_POWER ? this.#safe(() => game.previewPath(turn, aim.angle, aim.power, PREVIEW_SECONDS)) : null;
+    this.#updatePreview(game, turn, d.aim);
+  }
+
+  /**
+   * Dots along the banana's path for the current draw, up to just past the top of its arc: enough to see
+   * how far it is going, not where it lands. A slack string (no shot on release) shows none. Simulated
+   * only when the half-rounded aim changes.
+   */
+  #updatePreview(game, turn, aim) {
+    if (aim.power < BOW_MIN_POWER) {
+      this.previewKey = null;
+      this.path.hide();
+      return;
+    }
+    const key = `${turn}:${aim.angle}:${aim.power}:${game.wind}`;
+    if (key === this.previewKey) return;
+    this.previewKey = key;
+    const facing = game.monkeys?.[turn]?.facing ?? 1;
+    const gravity = game.gravity > 0 ? game.gravity : 9.8;
+    const seconds = Math.min(PREVIEW_MAX, Math.max(PREVIEW_MIN, (1.15 * launchVelocity(aim.angle, aim.power, facing).vy) / gravity));
+    const path = this.#safe(() => game.previewPath(turn, aim.angle, aim.power, seconds));
     if (path && this.world) this.path.show(path, this.world.matrixWorld, PLAYER_COLORS[turn]);
     else this.path.hide();
   }
