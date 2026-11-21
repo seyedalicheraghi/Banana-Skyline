@@ -4,8 +4,8 @@
 // Video and driving go through the PC: server.mjs forwards /rover-api/* to the Earth Rovers SDK.
 import * as THREE from 'three';
 import { MjpegParser } from './mjpeg.js';
-import { CommandLink, Edges, SEND_MS, SPEED_STEPS, StickClicks, commandFrom, readPad } from './drive.js';
-import { DEG, PICTURE_DISTANCE, VIEW_MODES, cameraFov, cameraLens, desktopFov, domeDrop, domeMesh, forwardOf, pictureSize, yawOf } from './view.js';
+import { CommandLink, DEADZONE, Edges, SEND_MS, SPEED_STEPS, StickClicks, TIMEOUT_MS, commandFrom, readPad } from './drive.js';
+import { DEG, PICTURE_DISTANCE, VIEW_MODES, cameraFov, cameraLens, desktopFov, domeDrop, domeMesh, fisheyeDirection, forwardOf, pictureSize, yawOf } from './view.js';
 import { apiBase, logEndpoint } from './api.js';
 
 const params = new URLSearchParams(location.search);
@@ -50,6 +50,18 @@ addEventListener('unhandledrejection', e => report('rover-unhandled', { reason: 
 
 const STALL_MS = 6000; // no bytes for this long: the stream is dead even if it was never closed
 const LIVE_MS = 2500; // a picture older than this is not live: the rover stops
+// When the rover's video freezes but stays subscribed, the SDK keeps sending copies of the last picture at
+// full rate. So frames are told apart by content: driving for this long on a picture that has not changed
+// means it is frozen (a moving camera always changes the picture), and the rover stops.
+const FROZEN_MS = 2000;
+
+/** A cheap fingerprint of a JPEG: its length and a hash of up to 4096 bytes spread over it. */
+function fingerprint(bytes) {
+  let h = 0x811c9dc5 ^ bytes.length;
+  const step = Math.max(1, Math.floor(bytes.length / 4096));
+  for (let i = 0; i < bytes.length; i += step) h = Math.imul(h ^ bytes[i], 0x01000193);
+  return `${bytes.length}:${h >>> 0}`;
+}
 
 /** One camera stream, kept as a texture that always holds the newest frame. */
 class Feed {
@@ -58,17 +70,32 @@ class Feed {
     this.fps = fps;
     this.texture = null;
     this.state = 'connecting'; // connecting | live | offline | denied (token refused) | none (no such camera)
+    this.denied = 0; // the HTTP status when denied: 401 token or slug, 403 bot busy or not enabled
     this.frameAt = 0;
-    this.count = 0;
+    this.changedAt = 0; // when the picture last changed
+    this.print = '';
+    this.count = 0; // changed frames this second
     this.rate = 0;
+    this.arrived = 0; // frames this second, repeats included
+    this.arrivals = 0;
     this.pending = null;
     this.decoding = false;
     this.run();
-    setInterval(() => { this.rate = this.count; this.count = 0; }, 1000);
+    setInterval(() => {
+      this.rate = this.count;
+      this.arrivals = this.arrived;
+      this.count = 0;
+      this.arrived = 0;
+    }, 1000);
   }
 
   get live() {
     return !!this.texture && performance.now() - this.frameAt < LIVE_MS;
+  }
+
+  /** How long the picture has stayed the same (ms). */
+  stillFor(now) {
+    return now - this.changedAt;
   }
 
   /** Width / height of the picture (16:9 until the first frame says otherwise). */
@@ -91,6 +118,7 @@ class Feed {
           wait = 10000;
         } else if (res.status === 401 || res.status === 403) {
           this.state = 'denied';
+          this.denied = res.status;
           wait = 5000;
         } else if (!res.ok) {
           this.state = this.texture ? 'offline' : 'connecting';
@@ -117,6 +145,15 @@ class Feed {
 
   // Frames that arrive while one is being decoded replace each other: always the newest, never a queue.
   offer(part) {
+    this.arrived++;
+    const print = fingerprint(part.data);
+    if (print === this.print) {
+      this.frameAt = performance.now(); // the same picture again: the stream is alive, the picture is not new
+      return;
+    }
+    this.print = print;
+    this.changedAt = performance.now();
+    this.count++;
     this.pending = part;
     if (!this.decoding) this.decode();
   }
@@ -151,7 +188,6 @@ class Feed {
     if (this.state !== 'live') report('rover-feed', { view: this.view, w: bitmap.width, h: bitmap.height });
     this.state = 'live';
     this.frameAt = performance.now();
-    this.count++;
   }
 }
 
@@ -265,7 +301,7 @@ const floor = new THREE.GridHelper(60, 120, 0x18213a, 0x0d1322); // only in the 
 floor.position.y = -1.3;
 anchor.add(floor);
 
-// The other camera as a rear-view mirror above the middle, nearer than the picture.
+// The other camera as a rear-view mirror, nearer than the picture; layout() places it above the picture.
 const MIRROR = { distance: 1.6, elevation: 21 * DEG, width: 2 * 1.6 * Math.tan(12.5 * DEG) };
 const mirrorRig = new THREE.Group();
 mirrorRig.position.set(0, Math.sin(MIRROR.elevation) * MIRROR.distance, -Math.cos(MIRROR.elevation) * MIRROR.distance);
@@ -335,7 +371,7 @@ const link = new CommandLink({
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ command }),
       keepalive: SAME_ORIGIN,
-      signal: AbortSignal.timeout(1500), // a request that hangs must not block the stops behind it
+      signal: AbortSignal.timeout(TIMEOUT_MS), // CommandLink gives up then too; this also frees the connection
       ...LOCAL,
     });
     return res.ok;
@@ -433,6 +469,8 @@ const held = (...codes) => codes.some(c => keys.has(c));
 const edges = new Edges();
 const clicks = new StickClicks();
 const CLICK_ACTIONS = { left: 'view', right: 'recenter', both: 'steer' };
+let motionSince = null; // when the current push of the sticks began
+let frozenStop = false; // the rover is held because the picture stopped changing while driving
 
 function readInput() {
   let throttleY = (held('KeyS', 'ArrowDown') ? 1 : 0) - (held('KeyW', 'ArrowUp') ? 1 : 0);
@@ -460,10 +498,22 @@ function readInput() {
       if (pad.trigger) stop = true;
     }
   }
-  const click = clicks.update(leftStick, rightStick);
-  if (click) actions[CLICK_ACTIONS[click]]();
-  if (!feeds[state.main].live) stop = true; // never drive blind
-  link.setInput(commandFrom({ throttleY, steerX, stop, scale: SPEED_STEPS[state.speed], lamp: state.lamp, steer: state.steer }));
+  const now = performance.now();
+  const click = clicks.update(leftStick, rightStick, now);
+  if (click === 'both' && (Math.abs(throttleY) > DEADZONE || Math.abs(steerX) > DEADZONE)) {
+    say('Let go of the sticks first', 'Then click both together to reverse steering'); // never flip mid-turn
+  } else if (click) {
+    actions[CLICK_ACTIONS[click]]();
+  }
+  const feed = feeds[state.main];
+  if (!feed.live) stop = true; // never drive blind
+  const input = { throttleY, steerX, scale: SPEED_STEPS[state.speed], lamp: state.lamp, steer: state.steer };
+  const wanted = commandFrom({ ...input, stop });
+  if (wanted.linear === 0 && wanted.angular === 0) motionSince = null;
+  else motionSince ??= now;
+  // A frozen picture (see FROZEN_MS) also means driving blind. Each new push gets FROZEN_MS to show a change.
+  frozenStop = motionSince !== null && now - motionSince > FROZEN_MS && feed.stillFor(now) > FROZEN_MS;
+  link.setInput(frozenStop ? commandFrom({ ...input, stop: true }) : wanted);
 }
 
 // ---------------------------------------------------------------------------------------------- VR
@@ -514,7 +564,7 @@ renderer.xr.addEventListener('sessionstart', () => {
   startScreen.hidden = true;
   info.hidden = true;
   needCenter = true;
-  say('Rover Cockpit', 'Status on your left hand, controls on your right');
+  say('Rover Cockpit', state.steer < 0 ? 'Steering is reversed (click both sticks to change)' : 'Status on your left hand, controls on your right');
   session.addEventListener('visibilitychange', () => { if (session.visibilityState !== 'visible') link.halt(); });
   renderer.xr.getReferenceSpace()?.addEventListener?.('reset', () => { needCenter = true; }); // system recentre
   report('rover-vr-start');
@@ -546,23 +596,44 @@ function message(now) {
   if (net.pc === false && access.state === 'prompt') {
     return { text: 'Allow Rover Cockpit to reach your PC', detail: 'On the PC run npm run rover -- --allow, then allow it in Quest Browser', warn: true };
   }
-  if (net.pc === false) return { text: 'Cannot reach the PC', detail: 'Connect the headset to the PC and run npm run rover there', warn: true };
+  if (net.pc === false) {
+    return { text: 'Cannot reach the PC', detail: SAME_ORIGIN ? 'Is npm run rover still running there?' : 'Connect by USB and run npm run rover on the PC (first time: npm run rover -- --allow)', warn: true };
+  }
   if (net.sdk === false) return { text: 'The rover SDK is not running on the PC', detail: 'Start it there with npm run rover:sdk', warn: true };
-  if (feed.state === 'denied') return { text: 'FrodoBots refused the SDK', detail: 'Check SDK_API_TOKEN and BOT_SLUG in the SDK .env file on the PC', warn: true };
-  if (sdk && sdk.browser_ready === false && sdk.browser_error) return { text: 'The SDK could not start', detail: clip(sdk.browser_error), warn: true };
+  if (sdk?.mission_started === false) return { text: 'The SDK is waiting for a mission', detail: 'Remove MISSION_SLUG from the SDK .env file and restart it', warn: true };
+  if (feed.state === 'denied') {
+    return feed.denied === 403
+      ? { text: 'The rover is busy or not enabled for the SDK', detail: 'Close other FrodoBots sessions (app, website, dashboard) and wait', warn: true }
+      : { text: 'FrodoBots refused the SDK', detail: 'Check SDK_API_TOKEN and BOT_SLUG in the SDK .env file on the PC', warn: true };
+  }
+  if (sdk && sdk.browser_ready === false) {
+    return sdk.browser_error
+      ? { text: 'The SDK could not start', detail: clip(sdk.browser_error), warn: true }
+      : { text: 'The SDK is connecting to the rover', detail: 'This can take a minute', warn: false };
+  }
   if (!feed.live) {
     const why = sdk?.video?.[feed.view]?.last_error;
     if (feed.state === 'none') return { text: `This rover has no ${feed.view} camera`, detail: 'Press B to switch back', warn: true };
     if (!feed.texture) return { text: `Waiting for the ${feed.view} camera`, detail: why ? clip(why) : 'The SDK can take a minute to reach the rover', warn: !!why };
     return { text: `No video from the ${feed.view} camera`, detail: why ? clip(why) : 'The rover is stopped. Is it on, with signal?', warn: true };
   }
+  // A broken link comes first: a rover that gets no commands does not move, so its picture stands still too.
   if (sdk?.rtm && sdk.rtm.ready === false) return { text: 'The SDK has lost its link to the rover', detail: sdk.rtm.last_error ? clip(sdk.rtm.last_error) : 'Driving will not work until it is back', warn: true };
   if (deliveriesStalled(now)) return { text: 'The rover is not confirming commands', detail: sdk?.rtm?.last_error ? clip(sdk.rtm.last_error) : 'It may not respond. Check its signal', warn: true };
-  if (link.ok === false) return { text: 'Drive commands are not getting through', detail: 'The rover may not respond', warn: true };
+  if (sendsFailing(now)) return { text: 'Drive commands are not getting through', detail: 'The rover may not respond', warn: true };
+  if (frozenStop) return { text: 'The picture is frozen', detail: 'The rover stopped. Let go of the sticks and try again', warn: true };
   return null;
 }
 
+/** The last drive commands failed, and some were sent lately (standing still nothing is sent to find out). */
+function sendsFailing(now) {
+  return link.ok === false && now - link.sentAt < 3000;
+}
+
 const clip = (s, n = 70) => (String(s).length > n ? `${String(s).slice(0, n - 1)}…` : String(s));
+
+/** New pictures per second; a stream of repeats (a still scene, or a frozen video) says so instead. */
+const videoRate = feed => (feed.rate > 0 || !feed.arrivals ? `${feed.rate} fps` : 'not changing');
 
 const fmt = (v, digits = 0, unit = '') => (v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v)) ? `${Number(v).toFixed(digits)}${unit}` : '–');
 
@@ -597,9 +668,9 @@ function drawBoards(now) {
   const t = now - telemetryAt < 12000 ? telemetry : null;
   const feed = feeds[state.main];
   const cmd = link.last;
-  const stalled = deliveriesStalled(now) || link.ok === false;
+  const stalled = deliveriesStalled(now) || sendsFailing(now);
   const rows = [
-    ['Video', feed.live ? `${title(state.main)} · ${feed.rate} fps` : 'none', !feed.live],
+    ['Video', feed.live ? `${title(state.main)} · ${videoRate(feed)}` : 'none', !feed.live || frozenStop],
     ['Battery', fmt(t?.battery, 0, '%'), Number(t?.battery) < 20],
     ['Signal', t?.signal_level !== undefined ? `${fmt(t.signal_level)} / 5` : '–', Number(t?.signal_level) <= 1],
     ['Speed limit', `${Math.round(SPEED_STEPS[state.speed] * 100)}%${state.steer < 0 ? ' · reversed' : ''}`, false],
@@ -649,7 +720,7 @@ function drawBoards(now) {
     });
   });
 
-  const line = msg && msg !== flash ? msg.text : feed.live ? `Live: ${state.main} camera, ${feed.rate} fps` : 'No video';
+  const line = msg && msg !== flash ? msg.text : feed.live ? `Live: ${state.main} camera, ${videoRate(feed)}` : 'No video';
   const el = document.getElementById('link');
   if (el.textContent !== line) {
     el.textContent = line;
@@ -683,13 +754,24 @@ function layout() {
   floor.visible = framed;
   floor.position.y = Math.min(-1.3, -drop - 0.3); // below the picture, never through it
 
-  mirrorRig.visible = state.mirror && inset.state !== 'none';
+  mirrorRig.visible = state.mirror && inset.live; // never a black patch while the other camera has no picture
   setMap(mirror, inset.live ? inset.texture : null);
   mirror.geometry = inset.view === 'rear' ? MIRRORED : PLAIN; // the rear camera reads like a mirror
   const mh = MIRROR.width / inset.aspect;
   mirror.scale.set(MIRROR.width, mh, 1);
   mirrorBezel.scale.set(MIRROR.width + 0.03, mh + 0.03, 1);
-  mirrorTag.mesh.position.set(0, -mh / 2 - 0.04, 0.002);
+  mirrorTag.mesh.position.set(-MIRROR.width / 2 - 0.1, 0, 0.002); // beside it, clear of the picture
+  // In VR the mirror hangs just above the picture, like a rear-view mirror over a windscreen, so the camera
+  // view stays whole. On a flat screen (where the view ends at the picture's edge) it sits inside its top.
+  let elevation = MIRROR.elevation;
+  if (renderer.xr.isPresenting) {
+    const top = curved ? Math.asin(fisheyeDirection(0.5, 0, fov, main.aspect).y) : Math.atan(height / 2 / PICTURE_DISTANCE);
+    elevation = Math.min(top + Math.atan(mh / 2 / MIRROR.distance) + 2 * DEG, 55 * DEG);
+  }
+  if (mirrorRig.rotation.x !== elevation) {
+    mirrorRig.position.set(0, Math.sin(elevation) * MIRROR.distance, -Math.cos(elevation) * MIRROR.distance);
+    mirrorRig.rotation.x = elevation; // faces the eyes
+  }
 
   if (!renderer.xr.isPresenting) {
     const fovY = desktopFov(fov, main.aspect, camera.aspect);

@@ -1,13 +1,20 @@
 // Turning controller input into rover commands, and deciding when to send them. No DOM: tested in Node.
 //
 // The EarthRover SDK takes POST /control {command: {linear, angular, lamp}}: linear +1 is full forward,
-// angular +1 is full left in FrodoBots' own dashboard (their firmware notes say right, so the sign can be
-// flipped: see `steer`), and the rover keeps doing the last command it received. So the link below streams
-// while moving, sends explicit stops, and stops by itself when the input goes quiet.
+// angular +1 is full left (FrodoBots' dashboard and ride logs; some of their docs say right, so the sign can
+// be flipped: see `steer`), and the rover keeps doing the last command it received. So the link below
+// streams while moving, sends explicit stops, and stops by itself when the input goes quiet.
 
 export const SPEED_STEPS = [0.3, 0.6, 1];
 export const DEADZONE = 0.15;
 export const SEND_MS = 100; // 10 Hz, the rate the SDK recommends
+export const STALE_MS = 300; // input older than this is no input: stop
+export const STOP_REPEATS = 5; // stops sent after moving, in case one is lost
+export const TIMEOUT_MS = 1500; // a request without an answer by then is given up, so stops are not held up
+export const SETTLE_MS = 1500; // quiet time after a drive before the lamp is restated (see CommandLink)
+// The rover ignores |linear| or |angular| up to 0.05 (firmware deadband): the first bit of stick past the
+// dead zone starts just above it, so the rover answers as soon as you move the stick.
+export const MIN_DRIVE = 0.06;
 
 /** Stick deflection (-1..1) to drive amount: dead centre, then gentle near the middle, full at the edge. */
 export function shape(v) {
@@ -19,6 +26,13 @@ export function shape(v) {
 
 const round = v => Math.round(v * 100) / 100 || 0; // "|| 0" turns -0 into 0
 
+/** Shaped stick value (-1..1) to a command value: 0 stays 0, otherwise from MIN_DRIVE up to `scale`. */
+function drive(shaped, scale) {
+  if (!shaped) return 0;
+  const floor = Math.min(MIN_DRIVE, scale);
+  return Math.sign(shaped) * (floor + (scale - floor) * Math.abs(shaped));
+}
+
 /**
  * @param {{throttleY: number, steerX: number, stop: boolean, scale: number, lamp: boolean, steer: 1|-1}} input
  *   throttleY: left stick Y as the gamepad reports it (up is -1); steerX: right stick X (right is +1);
@@ -26,7 +40,7 @@ const round = v => Math.round(v * 100) / 100 || 0; // "|| 0" turns -0 into 0
  */
 export function commandFrom({ throttleY = 0, steerX = 0, stop = false, scale = 1, lamp = false, steer = 1 }) {
   if (stop) return { linear: 0, angular: 0, lamp: lamp ? 1 : 0 };
-  return { linear: round(-shape(throttleY) * scale), angular: round(-shape(steerX) * scale * steer), lamp: lamp ? 1 : 0 };
+  return { linear: round(drive(-shape(throttleY), scale)), angular: round(drive(-shape(steerX), scale) * steer), lamp: lamp ? 1 : 0 };
 }
 
 /**
@@ -54,24 +68,39 @@ export class Edges {
   }
 }
 
+export const CLICK_MS = 600; // a stick held down longer is not a click (pushing the stick hard presses it)
+export const CHORD_MS = 300; // two clicks that start this close together are one "both" click
+
 /**
- * Clicks of the two thumbsticks, reported when released: 'left', 'right', or 'both' when the two were
- * down together at some point (then neither single click counts).
+ * Clicks of the two thumbsticks, reported once both are up: 'left', 'right', or 'both' when the two were
+ * clicked together (pressed within CHORD_MS of each other). A press held longer than CLICK_MS is not a click,
+ * so a stick pressed in while driving does not turn another click into 'both'.
  */
 export class StickClicks {
   constructor() {
-    this.left = false;
-    this.right = false;
+    this.sides = { left: this.#fresh(), right: this.#fresh() };
+  }
+
+  #fresh() {
+    return { down: false, pressed: false, start: 0, held: 0 };
   }
 
   /** @returns {'left'|'right'|'both'|null} */
-  update(leftDown, rightDown) {
-    if (leftDown) this.left = true;
-    if (rightDown) this.right = true;
-    if (leftDown || rightDown || !(this.left || this.right)) return null;
-    const click = this.left && this.right ? 'both' : this.left ? 'left' : 'right';
-    this.left = false;
-    this.right = false;
+  update(leftDown, rightDown, now) {
+    for (const [side, isDown] of [['left', leftDown], ['right', rightDown]]) {
+      const s = this.sides[side];
+      if (isDown && !s.down) Object.assign(s, { down: true, pressed: true, start: now });
+      if (!isDown && s.down) Object.assign(s, { down: false, held: now - s.start });
+    }
+    const { left: l, right: r } = this.sides;
+    if (l.down || r.down || !(l.pressed || r.pressed)) return null;
+    const clickL = l.pressed && l.held <= CLICK_MS;
+    const clickR = r.pressed && r.held <= CLICK_MS;
+    let click = null;
+    if (clickL && clickR) click = Math.abs(l.start - r.start) <= CHORD_MS ? 'both' : null; // ambiguous: neither
+    else if (clickL) click = 'left';
+    else if (clickR) click = 'right';
+    this.sides = { left: this.#fresh(), right: this.#fresh() };
     return click;
   }
 }
@@ -81,21 +110,25 @@ export class StickClicks {
  * tick() every SEND_MS. Rules:
  *   - while moving, every tick; input older than staleMs counts as "stop" (headset off, page frozen),
  *   - after moving, the stop is sent on the next `repeats` ticks in case one is lost,
- *   - standing still, a stop every `idleEvery` ticks: it keeps the lamp as chosen (the SDK's watchdog
- *     resends an old lamp state when commands stop) and shows whether commands still get through,
- *   - one request in flight at a time; a newer command replaces a waiting one.
+ *   - standing still, nothing, except a lamp switch, and one restatement of the lamp `settleMs` after the
+ *     last send following a drive: the SDK's watchdog sends its own stop about a second after commands stop,
+ *     with the lamp as it was when the drive began, and that restatement puts the lamp back,
+ *   - one request in flight at a time, given up after timeoutMs; a newer command replaces a waiting one.
  */
 export class CommandLink {
-  constructor({ send, now = () => performance.now(), staleMs = 300, repeats = 5, idleEvery = 5 }) {
+  constructor({
+    send, now = () => performance.now(), staleMs = STALE_MS, repeats = STOP_REPEATS, timeoutMs = TIMEOUT_MS, settleMs = SETTLE_MS,
+  }) {
     this.send = send;
     this.now = now;
     this.staleMs = staleMs;
     this.repeats = repeats;
-    this.idleEvery = idleEvery;
+    this.timeoutMs = timeoutMs;
+    this.settleMs = settleMs;
     this.cmd = { linear: 0, angular: 0, lamp: 0 };
     this.at = -Infinity;
     this.tail = 0;
-    this.idle = 0;
+    this.armed = false; // the rover was driven since the lamp was last restated
     this.sentLamp = 0;
     this.busy = false;
     this.waiting = null;
@@ -121,11 +154,18 @@ export class CommandLink {
     const fresh = this.now() - this.at <= this.staleMs;
     const cmd = fresh ? this.cmd : { linear: 0, angular: 0, lamp: this.cmd.lamp };
     const moving = cmd.linear !== 0 || cmd.angular !== 0;
-    if (moving) this.tail = this.repeats;
-    else if (cmd.lamp !== this.sentLamp) { /* a lamp switch goes out at once */ }
-    else if (this.tail > 0) this.tail--;
-    else if (!this.idleEvery || ++this.idle < this.idleEvery) return;
-    this.idle = 0;
+    if (moving) {
+      this.tail = this.repeats;
+      this.armed = true;
+    } else if (cmd.lamp !== this.sentLamp) {
+      // a lamp switch goes out at once
+    } else if (this.tail > 0) {
+      this.tail--;
+    } else if (this.armed && this.now() - this.sentAt >= this.settleMs) {
+      this.armed = false;
+    } else {
+      return;
+    }
     this.#post(cmd);
   }
 
@@ -138,10 +178,12 @@ export class CommandLink {
     this.last = cmd;
     this.sentLamp = cmd.lamp;
     this.sentAt = this.now();
-    Promise.resolve()
-      .then(() => this.send(cmd))
+    let timer;
+    const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('no answer')), this.timeoutMs); });
+    Promise.race([Promise.resolve().then(() => this.send(cmd)), timeout])
       .then((ok) => { this.ok = ok !== false; }, () => { this.ok = false; })
       .finally(() => {
+        clearTimeout(timer);
         this.busy = false;
         const next = this.waiting;
         this.waiting = null;

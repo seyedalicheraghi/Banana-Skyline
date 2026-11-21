@@ -2,7 +2,7 @@
 // VERSION (a hash of the build) and FILES (every file of the build). Installing caches all of them, so
 // the game starts with no network; a new build has a new VERSION, replaces the cache and is used from
 // the next launch on.
-const VERSION = '4ca71f90c642';
+const VERSION = 'eee9913e8696';
 const FILES = [
   "./",
   "assets/icon-192.png",
