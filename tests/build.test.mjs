@@ -13,7 +13,7 @@ import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { build, buildVersion } from '../scripts/build.mjs';
 import { pagesUrl } from '../scripts/deploy.mjs';
-import { drawIcon, encodePng } from '../scripts/icons.mjs';
+import { drawIcon, encodePng, roverShade } from '../scripts/icons.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tmpDirs = [];
@@ -120,11 +120,29 @@ describe('build: dist/ for static hosting', () => {
     }
   });
 
-  test('sw.js precaches exactly the files of the build, under a version that hashes them', () => {
+  test('the Rover Cockpit is built too, loading three.js from lib/', () => {
+    for (const f of fs.readdirSync(path.join(ROOT, 'rover'))) assert.ok(fs.existsSync(path.join(out, 'rover', f)), `rover/${f}`);
+    const html = fs.readFileSync(path.join(out, 'rover', 'index.html'), 'utf8');
+    const { imports } = JSON.parse(html.match(/<script type="importmap">([\s\S]*?)<\/script>/)[1]);
+    assert.equal(imports.three, '../lib/three/build/three.module.js');
+    assert.ok(fs.existsSync(path.join(out, 'rover', imports.three)));
+    assert.deepEqual(fs.readFileSync(path.join(out, 'rover', 'main.js')), fs.readFileSync(path.join(ROOT, 'rover', 'main.js')));
+    assert.match(html, /<link rel="manifest" href="manifest.webmanifest">/);
+    const manifest = JSON.parse(fs.readFileSync(path.join(out, 'rover', 'manifest.webmanifest'), 'utf8'));
+    assert.equal(manifest.name, 'Rover Cockpit');
+    assert.equal(manifest.start_url, './?app');
+    for (const icon of manifest.icons) {
+      const png = readPng(fs.readFileSync(path.join(out, 'rover', icon.src)));
+      assert.equal(`${png.width}x${png.height}`, icon.sizes, icon.src);
+    }
+  });
+
+  test('sw.js precaches exactly the files of the build except the Rover Cockpit, under a version that hashes them', () => {
     const sw = fs.readFileSync(path.join(out, 'sw.js'), 'utf8');
     const listed = swFiles(sw);
-    assert.deepEqual(listed, ['./', ...files(out).filter((f) => f !== 'sw.js' && f !== '.nojekyll')]);
-    assert.deepEqual(result.files, listed.slice(1));
+    assert.deepEqual(listed, ['./', ...files(out).filter((f) => f !== 'sw.js' && f !== '.nojekyll' && !f.startsWith('rover/'))]);
+    assert.deepEqual(result.files.filter((f) => !f.startsWith('rover/')), listed.slice(1));
+    assert.ok(result.files.includes('rover/main.js'), 'the cockpit is part of the version hash');
     assert.match(result.version, /^[0-9a-f]{12}$/);
     assert.ok(sw.includes(`const VERSION = '${result.version}';`));
     assert.ok(fs.existsSync(path.join(out, '.nojekyll')), 'GitHub Pages serves the files as they are');
@@ -245,6 +263,8 @@ describe('sw.js: offline cache', () => {
     assert.equal(await get('https://example.github.io/Banana-Skyline/not-built.js'), 'network https://example.github.io/Banana-Skyline/not-built.js');
     assert.equal(await get('https://example.github.io/Banana-Skyline/__log', 'POST'), undefined, 'POST passes through');
     assert.equal(await get('https://elsewhere.example/x.js'), undefined, 'other origins pass through');
+    assert.equal(await get('https://example.github.io/Banana-Skyline/rover/main.js'), undefined, 'the Rover Cockpit always comes from the network');
+    assert.equal(await get('http://localhost:8080/rover-api/data'), undefined, 'the rover API on the PC passes through');
   });
 });
 
@@ -275,6 +295,23 @@ describe('icons', () => {
       }
     }
     assert.ok(banana > n * n * 0.05, `banana covers ${banana} pixels`);
+  });
+
+  test('the rover icon is opaque and the rover stays inside the maskable safe zone (80% circle)', () => {
+    const n = 128;
+    const px = drawIcon(n, roverShade);
+    let rover = 0;
+    for (let j = 0; j < n; j++) {
+      for (let i = 0; i < n; i++) {
+        const o = (j * n + i) * 4;
+        assert.equal(px[o + 3], 255);
+        const bright = px[o] > 100 && px[o + 1] > 100; // body, trim, hubs, lamps: not the dark field
+        if (!bright) continue;
+        rover++;
+        assert.ok(Math.hypot((i + 0.5) / n - 0.5, (j + 0.5) / n - 0.5) < 0.4, `rover pixel ${i},${j} outside the safe zone`);
+      }
+    }
+    assert.ok(rover > n * n * 0.08, `rover covers ${rover} pixels`);
   });
 });
 

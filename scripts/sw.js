@@ -20,9 +20,12 @@ self.addEventListener('activate', (event) => {
     .then(() => self.clients.claim()));
 });
 
+// The Rover Cockpit (rover/) drives a real robot: always load its newest code from the network.
+const NETWORK_ONLY = new URL('rover/', self.location).href;
+
 self.addEventListener('fetch', (event) => {
   const req = event.request;
-  if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) return;
+  if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin || req.url.startsWith(NETWORK_ONLY)) return;
   event.respondWith(caches.open(CACHE)
     .then((cache) => cache.match(req, { ignoreSearch: true }))
     .then((hit) => hit ?? fetch(req)));

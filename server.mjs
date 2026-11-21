@@ -5,6 +5,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import { pipeline } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 
 const DIST = process.argv.includes('--dist');
@@ -14,7 +15,7 @@ const PORT = Number(process.env.PORT) || (DIST ? 8081 : 8080);
 const HOST = process.env.HOST || '127.0.0.1';
 
 // Only these trees are served (a build holds nothing else, so all of it is).
-const ALLOWED = DIST ? null : ['index.html', 'manifest.webmanifest', 'src/', 'assets/', 'node_modules/three/build/', 'node_modules/three/examples/jsm/',
+const ALLOWED = DIST ? null : ['index.html', 'rover/', 'manifest.webmanifest', 'src/', 'assets/', 'node_modules/three/build/', 'node_modules/three/examples/jsm/',
   'node_modules/iwer/build/']; // dev-only Quest emulator, loaded only with ?emulate
 
 const TYPES = {
@@ -40,7 +41,7 @@ function resolve(urlPath) {
     return null;
   }
   if (rel.includes('\u0000')) return null;
-  if (rel === '') rel = 'index.html';
+  if (rel === '' || rel.endsWith('/')) rel += 'index.html';
   const full = path.resolve(ROOT, rel);
   if (full !== ROOT && !full.startsWith(ROOT + path.sep)) return null;
   const posix = path.relative(ROOT, full).split(path.sep).join('/');
@@ -81,7 +82,89 @@ function headsetLog(req, res) {
   });
 }
 
+// Rover Cockpit (rover/): the page reaches the EarthRover SDK, which runs on this PC, through here, so the
+// headset needs only this one port. Only the calls the page makes are forwarded.
+const ROVER = new URL(process.env.ROVER_URL || 'http://127.0.0.1:8000');
+const ROVER_PREFIX = '/rover-api';
+const ROVER_CALLS = { GET: ['/feed', '/data', '/status'], POST: ['/control'] };
+
+// The Quest app loads the cockpit from GitHub Pages and calls this server through adb reverse as
+// http://localhost:8080: a public site talking to this machine, which browsers only allow when the server
+// says so (CORS, and Private Network Access preflights). Only the cockpit's own origins get that answer, so
+// no other web page can drive the rover through here. The Host check stops DNS-rebinding pages, which would
+// otherwise look same-origin.
+const ROVER_ORIGINS = (process.env.ROVER_ORIGINS ?? 'https://seyedalicheraghi.github.io').split(',').map(s => s.trim()).filter(Boolean);
+const LOOPBACK_HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/;
+// Pages served by this machine itself (other ports, *.localhost names, which browsers resolve to this
+// machine): the build preview (npm run preview) and tests of the cross-origin path.
+const LOCAL_ORIGIN = /^http:\/\/(([a-z0-9-]+\.)*localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/;
+
+/** Extra headers for a cockpit request; null when it must be refused (foreign site or foreign Host). */
+function roverAccess(headers, allowed = ROVER_ORIGINS) {
+  if (!LOOPBACK_HOST.test(headers.host ?? '')) return null;
+  const origin = headers.origin;
+  if (!origin || origin === `http://${headers.host}`) return {}; // the page served here, or a tool like curl
+  if (!allowed.includes(origin) && !LOCAL_ORIGIN.test(origin)) return null;
+  return { 'access-control-allow-origin': origin, vary: 'Origin' };
+}
+
+function preflight(req, res) {
+  const access = roverAccess(req.headers);
+  if (!access || !access['access-control-allow-origin']) {
+    res.writeHead(403).end();
+    return;
+  }
+  res.writeHead(204, {
+    ...access,
+    'access-control-allow-methods': 'GET, POST',
+    'access-control-allow-headers': 'content-type',
+    'access-control-max-age': '7200', // Chromium's ceiling: one preflight per two hours
+    ...(req.headers['access-control-request-private-network'] === 'true' ? { 'access-control-allow-private-network': 'true' } : {}),
+  }).end();
+}
+
+function roverProxy(req, res) {
+  const access = roverAccess(req.headers);
+  if (!access) {
+    res.writeHead(403, { 'content-type': 'text/plain' }).end('Forbidden');
+    return;
+  }
+  const target = req.url.slice(ROVER_PREFIX.length);
+  if (!ROVER_CALLS[req.method]?.includes(target.split('?')[0])) {
+    res.writeHead(404, { 'content-type': 'text/plain', ...access }).end('Not found');
+    return;
+  }
+  // A drive command must be JSON: other sites cannot send that without a preflight, which they fail above.
+  if (req.method === 'POST' && !/^application\/json\b/i.test(req.headers['content-type'] ?? '')) {
+    res.writeHead(415, { 'content-type': 'text/plain', ...access }).end('Send application/json');
+    return;
+  }
+  const headers = {};
+  for (const name of ['content-type', 'content-length', 'accept']) if (req.headers[name]) headers[name] = req.headers[name];
+  const upstream = http.request({ host: ROVER.hostname, port: ROVER.port || 80, method: req.method, path: target, headers }, (up) => {
+    const out = { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', ...access };
+    for (const name of ['content-type', 'content-length']) if (up.headers[name]) out[name] = up.headers[name];
+    res.writeHead(up.statusCode ?? 502, out);
+    pipeline(up, res, () => {}); // an SDK stream that breaks off also ends the page's request
+  });
+  upstream.on('error', () => {
+    if (res.headersSent) res.destroy();
+    else res.writeHead(502, { 'content-type': 'application/json', ...access }).end('{"detail":"The EarthRover SDK is not running on this PC"}');
+  });
+  res.on('close', () => upstream.destroy()); // the page left: stop pulling video
+  req.pipe(upstream);
+}
+
 const server = http.createServer((req, res) => {
+  const pathOnly = req.url?.split('?')[0] ?? '';
+  if (req.method === 'OPTIONS' && (pathOnly.startsWith(`${ROVER_PREFIX}/`) || pathOnly === '/__log')) {
+    preflight(req, res);
+    return;
+  }
+  if (req.url?.startsWith(`${ROVER_PREFIX}/`)) {
+    roverProxy(req, res);
+    return;
+  }
   if (req.method === 'POST' && req.url === '/__log') {
     headsetLog(req, res);
     return;
@@ -89,6 +172,14 @@ const server = http.createServer((req, res) => {
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     res.writeHead(405).end();
     return;
+  }
+  // A folder asked for without its slash (/rover): redirect, so the page's relative imports resolve.
+  if (/^\/(?!\/)[^?]*[^/?]$/.test(pathOnly) && !path.extname(pathOnly)) {
+    const index = resolve(`${pathOnly}/`);
+    if (index && fs.existsSync(index)) {
+      res.writeHead(301, { location: `${pathOnly}/${req.url.slice(pathOnly.length)}` }).end();
+      return;
+    }
   }
   const file = resolve(req.url ?? '/');
   if (!file) {

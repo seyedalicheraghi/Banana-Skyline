@@ -11,9 +11,25 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { iconPng } from './icons.mjs';
+import { iconPng, roverIconPng } from './icons.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const ROVER = path.join(ROOT, 'rover'); // the Rover Cockpit, which the second Quest app loads from the site
+const ROVER_MANIFEST = {
+  name: 'Rover Cockpit',
+  short_name: 'Rover Cockpit',
+  description: 'See what your FrodoBots EarthRover sees, in VR, and drive it with the Quest controllers.',
+  start_url: './?app',
+  scope: './',
+  display: 'standalone',
+  background_color: '#000000',
+  theme_color: '#000000',
+  icons: [
+    { src: 'icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+    { src: 'icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+    { src: 'icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+  ],
+};
 const ICON_SIZES = [192, 512];
 const DEV_ONLY = [path.join(ROOT, 'node_modules', 'iwer') + path.sep]; // ?emulate's WebXR emulator stays out of the build
 
@@ -51,16 +67,16 @@ function resolveSpec(spec, from, imports) {
   return target;
 }
 
-/** Every file under node_modules the game loads, following imports from src/ through the libraries. */
+/** Every file under node_modules the pages load, following imports from src/ and rover/ through the libraries. */
 function libraryFiles(imports) {
   const src = path.join(ROOT, 'src');
-  const queue = walk(src).filter(f => f.endsWith('.js'));
+  const queue = [...walk(src), ...walk(ROVER)].filter(f => f.endsWith('.js'));
   const found = new Set();
   for (let i = 0; i < queue.length; i++) {
     const text = fs.readFileSync(queue[i], 'utf8');
     for (const m of text.matchAll(SPEC_RE)) {
       const target = resolveSpec(m[1] ?? m[2], queue[i], imports);
-      if (!target || inside(src, target) || found.has(target)) continue;
+      if (!target || inside(src, target) || inside(ROVER, target) || found.has(target)) continue;
       if (!inside(path.join(ROOT, 'node_modules'), target)) throw new Error(`${rel(ROOT, queue[i])}: imports ${target}, outside src/ and node_modules/`);
       found.add(target);
       queue.push(target);
@@ -126,11 +142,25 @@ export function build(out) {
   fs.writeFileSync(path.join(out, 'index.html'), page);
   fs.writeFileSync(path.join(out, '.nojekyll'), '');
 
+  // The Rover Cockpit as it is, its import map pointed at lib/ too. It is not cached for offline use
+  // (sw.js leaves rover/ to the network): it needs the network anyway and must always be the newest.
+  fs.mkdirSync(path.join(out, 'rover'));
+  for (const f of fs.readdirSync(ROVER).filter(n => n.endsWith('.js'))) fs.copyFileSync(path.join(ROVER, f), path.join(out, 'rover', f));
+  const roverHtml = fs.readFileSync(path.join(ROVER, 'index.html'), 'utf8');
+  const roverImports = importMap(roverHtml);
+  const roverMap = JSON.stringify({ imports: Object.fromEntries(Object.entries(roverImports).map(([k, v]) => [k, v.replace(/^\.\.\/node_modules\//, '../lib/')])) }, null, 2);
+  let roverPage = replaceOnce(roverHtml, /(<script type="importmap">)[\s\S]*?(<\/script>)/, `$1\n${roverMap.replace(/^/gm, '    ')}\n  $2`, 'the rover import map');
+  roverPage = replaceOnce(roverPage, /(\n<\/head>)/, '\n  <link rel="manifest" href="manifest.webmanifest">$1', 'the rover </head>');
+  fs.writeFileSync(path.join(out, 'rover', 'index.html'), roverPage);
+  for (const size of ICON_SIZES) fs.writeFileSync(path.join(out, 'rover', `icon-${size}.png`), roverIconPng(size));
+  fs.writeFileSync(path.join(out, 'rover', 'manifest.webmanifest'), `${JSON.stringify(ROVER_MANIFEST, null, 2)}\n`);
+
   const files = walk(out).map(f => rel(out, f)).filter(f => f !== '.nojekyll').sort();
   const version = buildVersion(out, files);
+  const cached = files.filter(f => !f.startsWith('rover/'));
   const sw = fs.readFileSync(path.join(ROOT, 'scripts', 'sw.js'), 'utf8')
     .replace("const VERSION = 'dev';", `const VERSION = '${version}';`)
-    .replace('const FILES = [];', `const FILES = ${JSON.stringify(['./', ...files], null, 2)};`);
+    .replace('const FILES = [];', `const FILES = ${JSON.stringify(['./', ...cached], null, 2)};`);
   if (!sw.includes(version) || sw.includes('const FILES = [];')) throw new Error('scripts/sw.js: VERSION or FILES line not found');
   fs.writeFileSync(path.join(out, 'sw.js'), sw);
 

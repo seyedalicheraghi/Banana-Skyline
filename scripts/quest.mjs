@@ -2,7 +2,12 @@
 // Open Banana Skyline on a Meta Quest connected by USB:
 //   1. find adb and the headset, 2. serve the game on this PC (unless already running),
 //   3. `adb reverse` the port so the headset's localhost reaches this PC, 4. open it in Quest Browser.
-// Usage: node scripts/quest.mjs [--port 8080] [--serial ID] [--no-launch] [--status] [--dist]
+// Usage: node scripts/quest.mjs [--port 8080] [--serial ID] [--no-launch] [--status] [--dist] [--rover [--allow]]
+//   --rover starts the Rover Cockpit instead of the game; the EarthRover SDK must be running on this PC
+//   (npm run rover:sdk). With the Rover Cockpit app installed (npm run apk -- --app rover) it starts the app,
+//   which goes straight into the camera view; otherwise it opens rover/ in Quest Browser (one tap on Start).
+//   --allow opens the published cockpit in Quest Browser instead, so you can allow it once to reach this PC
+//   ("Apps on device"): the app is a public site talking to the headset's localhost, which Chromium asks about.
 //   --dist serves the build in dist/ (npm run build) on port 8081 instead, to test it before publishing.
 import { execFileSync } from 'node:child_process';
 import http from 'node:http';
@@ -16,10 +21,14 @@ const { values: opts } = parseArgs({
     'no-launch': { type: 'boolean', default: false },
     status: { type: 'boolean', default: false },
     dist: { type: 'boolean', default: false }, // read by server.mjs from process.argv
+    rover: { type: 'boolean', default: false },
+    allow: { type: 'boolean', default: false },
   },
 });
+if (opts.allow) opts.rover = true;
+const PUBLISHED_COCKPIT = 'https://seyedalicheraghi.github.io/Banana-Skyline/rover/';
 const PORT = Number(opts.port ?? process.env.PORT ?? (opts.dist ? 8081 : 8080));
-const URL = `http://localhost:${PORT}/`; // the game logs back to this terminal from Quest Browser ([headset] lines)
+const URL = `http://localhost:${PORT}/${opts.rover ? 'rover/?app' : ''}`; // the game logs back to this terminal from Quest Browser ([headset] lines)
 const BROWSER = 'com.oculus.browser';
 
 const ADB = findAdb();
@@ -108,7 +117,32 @@ if (!(await serverUp())) {
 adb(['reverse', `tcp:${PORT}`, `tcp:${PORT}`]);
 console.log(`Headset localhost:${PORT} now reaches this PC.`);
 
+if (opts.rover) {
+  if (PORT !== 8080) console.log('Note: the Rover Cockpit app reaches the PC on port 8080; use the default port for it.');
+  const sdk = await new Promise((resolve) => {
+    const req = http.get({ host: '127.0.0.1', port: 8000, path: '/status', timeout: 1500 }, (res) => { res.resume(); resolve(true); });
+    req.on('error', () => resolve(false));
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+  });
+  if (!sdk) console.log('The Earth Rovers SDK is not running on this PC yet: start it in another window with  npm run rover:sdk');
+}
+
 if (!opts['no-launch']) {
-  adb(['shell', 'am', 'start', '-a', 'android.intent.action.VIEW', '-d', URL, BROWSER]);
-  console.log(`Opened ${URL} in Quest Browser. Put the headset on and press "Play in VR".`);
+  const roverApp = 'io.github.seyedalicheraghi.rovercockpit';
+  const installed = opts.rover && (adb(['shell', 'pm', 'list', 'packages', roverApp], { quiet: true }) ?? '').split(/\r?\n/).includes(`package:${roverApp}`);
+  if (opts.allow) {
+    adb(['shell', 'am', 'start', '-a', 'android.intent.action.VIEW', '-d', PUBLISHED_COCKPIT, BROWSER]);
+    console.log(`Opened ${PUBLISHED_COCKPIT} in Quest Browser.`);
+    console.log('In the headset, allow it when Quest Browser asks to use apps on this device (it is the link to this PC).');
+    console.log('The Rover Cockpit app shares that permission: start it from the library, or run npm run rover.');
+  } else if (installed) {
+    // The app goes straight into VR: no browser shows at all.
+    adb(['shell', 'am', 'start', '-n', `${roverApp}/.LauncherActivity`]);
+    console.log('Started the Rover Cockpit app. Put the headset on: you see the rover\'s camera.');
+  } else {
+    adb(['shell', 'am', 'start', '-a', 'android.intent.action.VIEW', '-d', URL, BROWSER]);
+    console.log(opts.rover
+      ? `Opened ${URL} in Quest Browser. Put the headset on: you see the rover's camera (if a Start button shows, tap it).`
+      : `Opened ${URL} in Quest Browser. Put the headset on and press "Play in VR".`);
+  }
 }

@@ -5,7 +5,9 @@
 // that address, the name, the icon or the signing key change; game updates arrive with `npm run deploy`.
 // Needs, once: npm install -g @meta-quest/bubblewrap-cli@1.24.1, then `bubblewrap doctor` (it offers to
 // install a JDK 17 and the Android SDK). The first run creates the signing key in quest-app/.
-// Usage: node scripts/apk.mjs [--serial ID] [--no-install]
+// The Rover Cockpit is a second app (--app rover, project in quest-app/rover/) signed with the same key;
+// quest-app/assetlinks.json then lists both apps for the site to publish.
+// Usage: node scripts/apk.mjs [--app game|rover] [--serial ID] [--no-install]
 import { execFileSync, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -16,18 +18,25 @@ import { parseArgs } from 'node:util';
 import { findAdb } from './adb.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const APP = path.join(ROOT, 'quest-app');
-const MANIFEST = path.join(APP, 'twa-manifest.json');
-const SIGNING = path.join(APP, 'signing.json'); // keystore passwords; private, like the keystore
-const APK = path.join(APP, 'app-release-signed.apk');
+// Two apps share one signing key: the game (quest-app/) and the Rover Cockpit (quest-app/rover/).
+const APPS = { game: path.join(ROOT, 'quest-app'), rover: path.join(ROOT, 'quest-app', 'rover') };
+const SIGNING = path.join(APPS.game, 'signing.json'); // keystore passwords; private, like the keystore
 const BUILD_TOOLS = '34.0.0'; // what Bubblewrap 1.24 uses
 
 const { values: opts } = parseArgs({
   options: {
+    app: { type: 'string', default: 'game' },
     serial: { type: 'string' },
     'no-install': { type: 'boolean', default: false },
   },
 });
+if (!Object.hasOwn(APPS, opts.app)) {
+  console.error(`Unknown --app ${opts.app}; use one of: ${Object.keys(APPS).join(', ')}`);
+  process.exit(1);
+}
+const APP = APPS[opts.app];
+const MANIFEST = path.join(APP, 'twa-manifest.json');
+const APK = path.join(APP, 'app-release-signed.apk');
 
 function fail(lines) {
   console.error([].concat(lines).join('\n'));
@@ -150,7 +159,10 @@ if (!manifest.fingerprints.some(f => f.value === fp)) {
   manifest.fingerprints = [{ name: 'signing key', value: fp }];
   fs.writeFileSync(MANIFEST, `${JSON.stringify(manifest, null, 2)}\n`);
 }
-fs.writeFileSync(path.join(APP, 'assetlinks.json'), `${JSON.stringify(assetLinks(manifest.packageId, [fp]), null, 2)}\n`);
+// One file for the site to publish, vouching for every app signed with this key.
+const packages = Object.values(APPS).map(dir => path.join(dir, 'twa-manifest.json')).filter(f => fs.existsSync(f))
+  .map(f => JSON.parse(fs.readFileSync(f, 'utf8')).packageId);
+fs.writeFileSync(path.join(APPS.game, 'assetlinks.json'), `${JSON.stringify(packages.flatMap(p => assetLinks(p, [fp])), null, 2)}\n`);
 
 run('bubblewrap update', process.execPath, [cli, 'update', '--skipVersionUpgrade']); // regenerates the Android project
 buildApk(config, manifest, passwords);

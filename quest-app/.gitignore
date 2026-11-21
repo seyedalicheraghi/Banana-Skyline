@@ -4,3 +4,7 @@
 !.gitignore
 !twa-manifest.json
 !assetlinks.json
+# The Rover Cockpit app (npm run apk -- --app rover) is generated in rover/; only its manifest is source.
+!rover/
+rover/*
+!rover/twa-manifest.json

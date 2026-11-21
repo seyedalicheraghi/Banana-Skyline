@@ -8,6 +8,12 @@
       "port": 8080
     },
     {
+      "name": "mock-rover",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["scripts/mock-rover.mjs"],
+      "port": 8000
+    },
+    {
       "name": "banana-skyline-dist",
       "runtimeExecutable": "node",
       "runtimeArgs": ["server.mjs", "--dist"],

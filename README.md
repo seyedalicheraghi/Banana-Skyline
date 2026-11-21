@@ -177,6 +177,103 @@ How it works: `desktop/main.mjs` opens one window and serves `dist/` through a p
 windows or navigate elsewhere, and every http(s) request is refused: the game needs no network.
 `tests/desktop.test.mjs` covers the path mapping (nothing outside `dist/` is served) and the icon file.
 
+## Rover Cockpit (FrodoBots EarthRover)
+
+Put the headset on and you see what your EarthRover sees, at the camera's real size: the front camera's
+picture surrounds you as far as its lens reaches (about 126° across and 68° up and down). The lens is a
+fisheye, so in VR the picture is drawn on a piece of sphere 4 m away, each pixel back in the direction it
+was seen from; a desktop browser shows the flat picture. There is no browser window and no button: the
+cockpit goes into VR by itself. The rear camera hangs just above the picture like a rear-view mirror
+(mirrored, like one). The status is above your left controller, the controls above your right one, and a note
+follows your gaze only when something needs saying.
+
+How it fits together: rover ⇄ FrodoBots cloud ⇄ the [Earth Rovers SDK](https://github.com/frodobots-org/earth-rovers-sdk)
+on this PC (port 8000) ⇄ `server.mjs` (port 8080, which forwards `/rover-api/*` to the SDK) ⇄ USB
+(`adb reverse`) ⇄ the headset. The cockpit is the page `rover/`; the **Rover Cockpit** app on the headset
+loads the published copy of it, which reaches this PC through the same USB link.
+
+### Set up once
+
+1. **The SDK** lives next to this project in `../earth-rovers-sdk`, with its own Python 3.11 environment
+   in `.venv` (its pinned packages have no builds for Python 3.13). In its `.env`, fill in `SDK_API_TOKEN`
+   (from <https://my.frodobots.com/owner/settings>) and `BOT_SLUG` (your rover's name), and leave
+   `MISSION_SLUG` out (missions are for FrodoBots' shared rovers). `CONTROL_WATCHDOG_S=1` is already set
+   there: the SDK stops the rover a second after drive commands stop reaching it. Keep it at 1 or less.
+2. **The app.** It is a second Bubblewrap app in `quest-app/rover/`, signed with the game's key, that loads
+   the cockpit published with the game (`npm run deploy`). `quest-app/assetlinks.json` lists both apps and
+   must be published as described under "Asset links" above, or the immersive app does not start. With the
+   headset connected, install it:
+
+   ```bash
+   npm run apk -- --app rover
+   ```
+
+3. **Let the app reach this PC.** The app is a website calling the headset's own address (the USB link),
+   which Quest Browser lets a site do only after you allow it once. With the headset connected:
+
+   ```bash
+   npm run rover -- --allow
+   ```
+
+   This opens the published cockpit in Quest Browser; put the headset on and allow it when asked (it may be
+   called "Apps on device"). The app shares that permission. If you said no, change it in Quest Browser's
+   site settings for `seyedalicheraghi.github.io`.
+
+### Drive
+
+1. Turn the rover on, and start the SDK in a window you leave open:
+
+   ```bash
+   npm run rover:sdk
+   ```
+
+2. Connect the headset by USB and run:
+
+   ```bash
+   npm run rover
+   ```
+
+   This serves the cockpit, links the headset to this PC (`adb reverse tcp:8080`) and starts the app. Without
+   the app it opens the cockpit in Quest Browser instead, with one Start button. After that you can also
+   start the app from the headset's library, for as long as the cable stays in.
+
+The first time, check the steering with the rover's wheels off the ground or at the 30 % limit: FrodoBots'
+own documents disagree on which way it turns. If it turns the wrong way, click both sticks together.
+
+| Control | Does |
+| --- | --- |
+| Left stick up / down | forward / back |
+| Right stick left / right | steer |
+| Trigger (either hand) | stop while held |
+| A | lamp on / off |
+| B | front or rear camera in front of you |
+| X | show / hide the mirror |
+| Y | speed limit: 30 %, 60 %, 100 % (every session starts at 30 %) |
+| Left stick click | exact camera view / smaller framed view (easier on the stomach) |
+| Right stick click | bring the picture back in front of you |
+| Both sticks clicked together (sticks let go) | reverse steering, remembered on this headset |
+
+The rover stops when you let go of the sticks, while a trigger is held, whenever the camera in front of you
+has no live picture or its picture stops changing while you drive (a frozen video), while a Quest system menu
+is open, when the headset comes off or the page is hidden, and when input stops arriving for 0.3 s. A drive
+command with no answer in 1.5 s is dropped so the stops behind it are not held up, and the SDK's watchdog
+stops the rover once commands stop reaching it.
+
+The field of view and lens are set per camera in `rover/view.js` (`CAMERAS`); try other values with `?fov=`,
+`?rearfov=` and `?lens=rectilinear` on the cockpit's address. In a desktop browser the page drives with the
+keyboard: W A S D or the arrow keys, Space to stop, L lamp, C swap cameras, M mirror, V view size, R centre,
+F reverse steering, 1 2 3 speed limit.
+
+Without the rover: `npm run rover:mock` stands in for the SDK with test pictures that react to the commands
+(`http://localhost:8000/mock?freeze=1`, `?rtm=0`, `?deliver=0` and `?ready=0` fake the faults the cockpit
+warns about), and `?emulate` fakes a Quest 3 (sticks and buttons through `xrDevice.controllers` in the console).
+
+`server.mjs` forwards only the four calls the cockpit makes (`/feed`, `/data`, `/status`, `/control`) to the
+SDK (`ROVER_URL`, default `http://127.0.0.1:8000`). It answers only the cockpit's own pages: this PC's, and the
+published copy (`ROVER_ORIGINS`, default `https://seyedalicheraghi.github.io`), so another web page cannot
+drive the rover through it. Tests: `tests/rover.test.mjs` (stream parser, stick mapping, stop rules, lens
+geometry) and the proxy cases in `tests/server.test.mjs`.
+
 ## For developers
 
 - `docs/DESIGN.md`: architecture, coordinates, and the contracts between modules.

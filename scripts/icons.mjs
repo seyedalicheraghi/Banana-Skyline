@@ -47,15 +47,50 @@ function shade(x, y) {
   return c;
 }
 
-/** RGBA pixels of a size x size icon, 4x4 supersampled. */
-export function drawIcon(size) {
+// The Rover Cockpit's icon: a small rover seen from the front, camera on top, lamps on, on a dark field.
+// Everything stays inside the central 80% circle too.
+const ROVER_BG_TOP = [4, 7, 14];
+const ROVER_BG_BOTTOM = [20, 30, 56];
+const ROVER_BODY = [232, 238, 247];
+const ROVER_TRIM = [150, 162, 184];
+const ROVER_TYRE = [28, 32, 42];
+const ROVER_HUB = [118, 128, 148];
+const ROVER_LENS = [16, 22, 36];
+const ROVER_GLINT = [110, 196, 255];
+const ROVER_LAMP = [255, 207, 90];
+
+const inBox = (x, y, l, t, r, b, radius) => {
+  const cx = Math.min(Math.max(x, l + radius), r - radius);
+  const cy = Math.min(Math.max(y, t + radius), b - radius);
+  return Math.hypot(x - cx, y - cy) <= radius && x >= l && x <= r && y >= t && y <= b;
+};
+
+/** Colour of the rover icon at (x, y) in 0..1, y down. */
+export function roverShade(x, y) {
+  let c = mix(ROVER_BG_TOP, ROVER_BG_BOTTOM, y);
+  if (y > 0.71) c = mix(c, [34, 46, 76], 0.6); // ground
+  for (const wx of [0.32, 0.68]) {
+    const d = Math.hypot(x - wx, y - 0.66);
+    if (d < 0.085) c = d < 0.032 ? ROVER_HUB : ROVER_TYRE;
+  }
+  if (inBox(x, y, 0.23, 0.42, 0.77, 0.63, 0.05)) c = y > 0.585 ? ROVER_TRIM : ROVER_BODY;
+  for (const lx of [0.31, 0.69]) if (Math.hypot(x - lx, y - 0.505) < 0.028) c = ROVER_LAMP;
+  if (inBox(x, y, 0.47, 0.36, 0.53, 0.43, 0.005)) c = ROVER_TRIM; // mast
+  if (inBox(x, y, 0.4, 0.27, 0.6, 0.38, 0.03)) c = ROVER_BODY; // camera head
+  const lens = Math.hypot(x - 0.5, y - 0.325);
+  if (lens < 0.04) c = Math.hypot(x - 0.513, y - 0.312) < 0.013 ? ROVER_GLINT : ROVER_LENS;
+  return c;
+}
+
+/** RGBA pixels of a size x size icon, 4x4 supersampled; `paint` gives the colour at (x, y) in 0..1. */
+export function drawIcon(size, paint = shade) {
   const px = Buffer.alloc(size * size * 4);
   const n = 4;
   for (let j = 0; j < size; j++) {
     for (let i = 0; i < size; i++) {
       let sum = [0, 0, 0];
       for (let s = 0; s < n * n; s++) {
-        const c = shade((i + ((s % n) + 0.5) / n) / size, (j + (Math.floor(s / n) + 0.5) / n) / size);
+        const c = paint((i + ((s % n) + 0.5) / n) / size, (j + (Math.floor(s / n) + 0.5) / n) / size);
         sum = sum.map((v, k) => v + c[k]);
       }
       const o = (j * size + i) * 4;
@@ -105,3 +140,4 @@ export function encodePng(width, height, rgba) {
 }
 
 export const iconPng = (size) => encodePng(size, size, drawIcon(size));
+export const roverIconPng = (size) => encodePng(size, size, drawIcon(size, roverShade));

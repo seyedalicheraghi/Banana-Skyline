@@ -1,16 +1,17 @@
 #!/usr/bin/env node
 // Static checks for the browser code (there is no bundler to catch these):
-//   1. every file under src/ parses (node --check),
-//   2. every module except the app entry loads in Node (no DOM access at import time),
-//   3. every named import in every file (main.js included) exists in the module it imports from,
-//   4. the import map and the server allow-list cover what the page loads.
+//   1. every file under src/ and rover/ parses (node --check),
+//   2. every module except the two page entries loads in Node (no DOM access at import time),
+//   3. every named import in every file (the entries included) exists in the module it imports from,
+//   4. the import maps and the server allow-list cover what the pages (index.html, rover/index.html) load.
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const ENTRY = path.join(ROOT, 'src', 'app', 'main.js'); // touches the DOM at load; checked statically only
+// Page entries touch the DOM at load; they are checked statically only.
+const ENTRIES = [path.join(ROOT, 'src', 'app', 'main.js'), path.join(ROOT, 'rover', 'main.js')];
 const problems = [];
 
 function walk(dir) {
@@ -22,7 +23,7 @@ function walk(dir) {
 }
 
 const rel = (f) => path.relative(ROOT, f).split(path.sep).join('/');
-const files = walk(path.join(ROOT, 'src')).sort();
+const files = [...walk(path.join(ROOT, 'src')), ...walk(path.join(ROOT, 'rover'))].sort();
 
 for (const file of files) {
   const r = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });
@@ -41,7 +42,7 @@ async function load(file) {
 }
 
 for (const file of files) {
-  if (file === ENTRY) continue;
+  if (ENTRIES.includes(file)) continue;
   const { err } = await load(file);
   if (err) problems.push(`${rel(file)}: fails to load in Node: ${err.message}`);
 }
@@ -77,7 +78,7 @@ for (const file of files) {
       problems.push(`${rel(file)}: bare import "${spec}" is not in the import map`);
       continue;
     }
-    if (target === ENTRY) continue;
+    if (ENTRIES.includes(target)) continue;
     const { mod, err } = await load(target);
     if (err) continue; // already reported
     for (const name of names) {
@@ -88,20 +89,23 @@ for (const file of files) {
   }
 }
 
-// The page: import map targets exist and the server serves every loaded path.
-const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
-const map = JSON.parse(html.match(/<script type="importmap">([\s\S]*?)<\/script>/)[1]).imports;
-for (const [key, value] of Object.entries(map)) {
-  if (!fs.existsSync(path.join(ROOT, value))) problems.push(`index.html: import map "${key}" -> ${value} does not exist`);
+// The pages: import map targets exist and the server serves every loaded path.
+for (const page of ['index.html', 'rover/index.html']) {
+  const dir = path.dirname(path.join(ROOT, page));
+  const html = fs.readFileSync(path.join(ROOT, page), 'utf8');
+  const map = JSON.parse(html.match(/<script type="importmap">([\s\S]*?)<\/script>/)[1]).imports;
+  for (const [key, value] of Object.entries(map)) {
+    if (!fs.existsSync(path.join(dir, value))) problems.push(`${page}: import map "${key}" -> ${value} does not exist`);
+  }
+  for (const m of html.matchAll(/(?:href|src)="([^"]+)"/g)) {
+    const ref = m[1];
+    if (/^(data:|https?:|#)/.test(ref)) continue;
+    if (!fs.existsSync(path.join(dir, ref))) problems.push(`${page}: references missing file ${ref}`);
+  }
 }
 const server = fs.readFileSync(path.join(ROOT, 'server.mjs'), 'utf8');
-for (const needed of ['src/', 'node_modules/three/build/', 'node_modules/three/examples/jsm/', 'index.html']) {
+for (const needed of ['src/', 'rover/', 'node_modules/three/build/', 'node_modules/three/examples/jsm/', 'index.html']) {
   if (!server.includes(`'${needed}'`)) problems.push(`server.mjs: allow-list is missing ${needed}`);
-}
-for (const m of html.matchAll(/(?:href|src)="([^"]+)"/g)) {
-  const ref = m[1];
-  if (/^(data:|https?:|#)/.test(ref)) continue;
-  if (!fs.existsSync(path.join(ROOT, ref))) problems.push(`index.html: references missing file ${ref}`);
 }
 
 if (problems.length) {
