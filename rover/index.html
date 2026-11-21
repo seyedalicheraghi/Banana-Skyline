@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Rover Cockpit</title>
+  <meta name="description" content="See what your FrodoBots EarthRover sees, in VR on Meta Quest, and drive it with the controllers.">
+  <meta name="theme-color" content="#000000">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "../lib/three/build/three.module.js",
+        "three/addons/": "../lib/three/examples/jsm/"
+      }
+    }
+  </script>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #000; color: #dbe4f3; font: 14px/1.45 system-ui, sans-serif; }
+    #app { position: fixed; inset: 0; }
+    #app canvas { display: block; width: 100%; height: 100%; }
+    /* Shown only when VR could not start by itself: one tap anywhere starts it. */
+    #start {
+      position: fixed; inset: 0; z-index: 10; display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 18px; background: #000; cursor: pointer; visibility: hidden;
+    }
+    #start.ready { visibility: visible; }
+    #start[hidden] { display: none; }
+    #start h1 { margin: 0; font-size: 28px; font-weight: 600; letter-spacing: .02em; }
+    #go {
+      font: 600 22px system-ui, sans-serif; color: #000; background: #ffcf5a; border: 0; border-radius: 999px;
+      padding: 18px 64px; cursor: pointer;
+    }
+    #start p { margin: 0; color: #8fa2c2; }
+    #info {
+      position: fixed; left: 12px; top: 12px; max-width: 360px; padding: 10px 14px;
+      background: rgba(6, 10, 20, .74); border: 1px solid #1f2a40; border-radius: 10px;
+    }
+    #info h1 { margin: 0 0 4px; font-size: 15px; }
+    #info p { margin: 4px 0; color: #9fb0cc; }
+    #info kbd { background: #141c2e; border: 1px solid #2c3a57; border-radius: 4px; padding: 0 4px; font: 12px ui-monospace, Consolas, monospace; color: #dbe4f3; }
+    #link { color: #ffcf5a; }
+    #boot-error {
+      position: fixed; left: 16px; right: 16px; bottom: 16px; z-index: 1000; padding: 12px 16px;
+      background: #3b0d0d; color: #ffd7d7; border: 1px solid #ff6b6b; border-radius: 8px;
+      font: 14px/1.4 ui-monospace, Consolas, monospace; white-space: pre-wrap; max-height: 40vh; overflow: auto;
+    }
+  </style>
+  <link rel="manifest" href="manifest.webmanifest">
+</head>
+<body>
+  <div id="app"></div>
+  <div id="start" onclick="document.getElementById('go').click()">
+    <h1>Rover Cockpit</h1>
+    <button id="go" type="button" onclick="event.stopPropagation()">Start</button>
+    <p>Put the headset on: the rover's camera fills your view.</p>
+  </div>
+  <div id="info" hidden>
+    <h1>Rover Cockpit</h1>
+    <p id="link">Connecting to the rover…</p>
+    <p><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> drive, <kbd>Space</kbd> stop, <kbd>L</kbd> lamp,
+      <kbd>C</kbd> swap cameras, <kbd>M</kbd> mirror, <kbd>V</kbd> view size, <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> speed limit.</p>
+  </div>
+  <div id="boot-error" hidden></div>
+  <script>
+    // Show load/runtime errors on screen: there is no dev console inside the headset.
+    (function () {
+      var box = document.getElementById('boot-error');
+      function show(msg) { box.hidden = false; box.textContent += msg + '\n'; }
+      window.addEventListener('error', function (e) { show('Error: ' + (e.message || e) + (e.filename ? ' (' + e.filename + ':' + e.lineno + ')' : '')); });
+      window.addEventListener('unhandledrejection', function (e) { show('Unhandled: ' + (e.reason && (e.reason.stack || e.reason.message) || e.reason)); });
+    })();
+  </script>
+  <script type="module" src="main.js"></script>
+</body>
+</html>

@@ -2,7 +2,7 @@
 // VERSION (a hash of the build) and FILES (every file of the build). Installing caches all of them, so
 // the game starts with no network; a new build has a new VERSION, replaces the cache and is used from
 // the next launch on.
-const VERSION = '873e8136ad62';
+const VERSION = '4ca71f90c642';
 const FILES = [
   "./",
   "assets/icon-192.png",
@@ -74,9 +74,12 @@ self.addEventListener('activate', (event) => {
     .then(() => self.clients.claim()));
 });
 
+// The Rover Cockpit (rover/) drives a real robot: always load its newest code from the network.
+const NETWORK_ONLY = new URL('rover/', self.location).href;
+
 self.addEventListener('fetch', (event) => {
   const req = event.request;
-  if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) return;
+  if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin || req.url.startsWith(NETWORK_ONLY)) return;
   event.respondWith(caches.open(CACHE)
     .then((cache) => cache.match(req, { ignoreSearch: true }))
     .then((hit) => hit ?? fetch(req)));
