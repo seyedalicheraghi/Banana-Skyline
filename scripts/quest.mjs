@@ -5,14 +5,18 @@
 // Usage: node scripts/quest.mjs [--port 8080] [--serial ID] [--no-launch] [--status] [--dist] [--rover [--allow]]
 //   --rover starts the Rover Cockpit instead of the game; the EarthRover SDK must be running on this PC
 //   (npm run rover:sdk). With the Rover Cockpit app installed (npm run apk -- --app rover) it starts the app,
-//   which goes straight into the camera view; otherwise it opens rover/ in Quest Browser (one tap on Start).
-//   --allow opens the published cockpit in Quest Browser instead, so you can allow it once to reach this PC
-//   ("Apps on device"): the app is a public site talking to the headset's localhost, which Chromium asks about.
+//   which goes straight into the camera view, and keeps it allowed to reach this PC for as long as this script
+//   runs, restoring the links after a replug (the app is a public site talking to the headset's localhost, which
+//   Chromium otherwise asks about; scripts/devtools.mjs).
+//   Without the app it opens rover/ in Quest Browser (one tap on Start).
+//   --allow is the manual fallback: it opens the published cockpit in Quest Browser so you can allow it once
+//   ("Apps on device").
 //   --dist serves the build in dist/ (npm run build) on port 8081 instead, to test it before publishing.
 import { execFileSync } from 'node:child_process';
 import http from 'node:http';
 import { parseArgs } from 'node:util';
 import { findAdb } from './adb.mjs';
+import { DEVTOOLS_PORT, DEVTOOLS_SOCKET, holdLoopbackGrant } from './devtools.mjs';
 
 const { values: opts } = parseArgs({
   options: {
@@ -86,8 +90,9 @@ const device = list.find(d => d.serial === opts.serial);
 if (!device) {
   if (list.some(d => d.state === 'unauthorized')) {
     fail([
-      'The headset is connected but has not allowed this PC yet.',
-      'Put the headset on and choose "Allow" (tick "Always allow from this computer") on the USB debugging prompt, then run this again.',
+      'The headset is connected but does not trust this PC (not yet, or no longer: Android forgets it after a week unused).',
+      'Put the headset on: on "Allow USB debugging?" tick "Always allow from this computer", choose Allow, then run this again.',
+      'No prompt? Unplug the cable, restart the headset, and plug it in once it shows the home screen (a prompt sent while it starts is lost).',
     ]);
   }
   fail([
@@ -127,9 +132,32 @@ if (opts.rover) {
   if (!sdk) console.log('The Earth Rovers SDK is not running on this PC yet: start it in another window with  npm run rover:sdk');
 }
 
+const roverApp = 'io.github.seyedalicheraghi.rovercockpit';
+const installed = opts.rover && (adb(['shell', 'pm', 'list', 'packages', roverApp], { quiet: true }) ?? '').split(/\r?\n/).map(l => l.trim()).includes(`package:${roverApp}`);
+
+// The app is the published cockpit calling this PC through the headset's localhost, which the browser allows
+// only with a permission an immersive app cannot ask for: grant it over USB debugging and keep it granted while
+// this runs (scripts/devtools.mjs). Not with --allow, whose point is a lasting grant made by hand.
+if (installed && !opts.allow) {
+  let granted = false;
+  holdLoopbackGrant({
+    // Runs before every DevTools session, so a replugged cable or restarted headset gets both links back.
+    forward: () => {
+      adb(['reverse', `tcp:${PORT}`, `tcp:${PORT}`]);
+      adb(['forward', `tcp:${DEVTOOLS_PORT}`, DEVTOOLS_SOCKET]);
+    },
+    onGranted: () => {
+      console.log(granted ? 'The Rover Cockpit app may reach this PC again.'
+        : 'The Rover Cockpit app may reach this PC (granted over USB debugging; leave this window open while you drive).');
+      granted = true;
+    },
+    onStuck: why => console.log(`Waiting to let the app reach this PC (${why}). Is the cable in and the app open? `
+      + 'If the app keeps saying it cannot reach the PC, run  npm run rover -- --allow  once.'),
+    onRefused: why => console.log(`The headset's browser refused to let the app reach this PC (${why}). Run  npm run rover -- --allow  once instead.`),
+  });
+}
+
 if (!opts['no-launch']) {
-  const roverApp = 'io.github.seyedalicheraghi.rovercockpit';
-  const installed = opts.rover && (adb(['shell', 'pm', 'list', 'packages', roverApp], { quiet: true }) ?? '').split(/\r?\n/).includes(`package:${roverApp}`);
   if (opts.allow) {
     adb(['shell', 'am', 'start', '-a', 'android.intent.action.VIEW', '-d', PUBLISHED_COCKPIT, BROWSER]);
     console.log(`Opened ${PUBLISHED_COCKPIT} in Quest Browser.`);

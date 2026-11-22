@@ -591,13 +591,13 @@ function message(now) {
   if (flash && now < flash.until) return flash;
   const feed = feeds[state.main];
   if (net.pc === false && access.state === 'denied') {
-    return { text: 'Rover Cockpit may not reach your PC', detail: 'Quest Browser settings: allow "Apps on device" for seyedalicheraghi.github.io', warn: true };
+    return { text: 'Rover Cockpit may not reach your PC', detail: 'Run npm run rover on the PC and leave it open, or allow "Apps on device" in Quest Browser settings', warn: true };
   }
   if (net.pc === false && access.state === 'prompt') {
-    return { text: 'Allow Rover Cockpit to reach your PC', detail: 'On the PC run npm run rover -- --allow, then allow it in Quest Browser', warn: true };
+    return { text: 'Rover Cockpit cannot reach your PC yet', detail: 'Run npm run rover on the PC and leave it open. Still stuck: npm run rover -- --allow', warn: true };
   }
   if (net.pc === false) {
-    return { text: 'Cannot reach the PC', detail: SAME_ORIGIN ? 'Is npm run rover still running there?' : 'Connect by USB and run npm run rover on the PC (first time: npm run rover -- --allow)', warn: true };
+    return { text: 'Cannot reach the PC', detail: SAME_ORIGIN ? 'Is npm run rover still running there?' : 'Connect by USB and run npm run rover on the PC, and leave it open', warn: true };
   }
   if (net.sdk === false) return { text: 'The rover SDK is not running on the PC', detail: 'Start it there with npm run rover:sdk', warn: true };
   if (sdk?.mission_started === false) return { text: 'The SDK is waiting for a mission', detail: 'Remove MISSION_SLUG from the SDK .env file and restart it', warn: true };

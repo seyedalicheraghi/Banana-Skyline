@@ -45,7 +45,10 @@ One-time setup:
    (it asks you to create a free developer account at developers.meta.com the first time).
 2. Restart the headset and connect it to this PC with a USB-C **data** cable.
 3. Put the headset on: a pop-up asks **Allow USB debugging?** Tick "Always allow from this computer"
-   and choose **Allow**. (Missed it? Meta button → Notifications.)
+   and choose **Allow**. (Missed it? Meta button → Notifications.) If no prompt comes, or `adb devices` lists
+   the headset as `unauthorized` (Android forgets the PC after a week unused), unplug the cable, restart the
+   headset, and plug it in once it shows the home screen: a prompt sent while it starts up is lost. Answer only
+   the newest prompt: one left from an earlier connection does nothing.
 4. Install adb once, if you do not have it: `winget install Google.PlatformTools`.
 
 Every time you play:
@@ -196,7 +199,9 @@ loads the published copy of it, which reaches this PC through the same USB link.
 
 1. **The SDK** lives next to this project in `../earth-rovers-sdk`, with its own Python 3.11 environment
    in `.venv` (its pinned packages have no builds for Python 3.13). In its `.env`, fill in `SDK_API_TOKEN`
-   (from <https://my.frodobots.com/owner/settings>) and `BOT_SLUG` (your rover's name), and leave
+   (from <https://my.frodobots.com/owner/settings>) and `BOT_SLUG` (your rover's name in slug form: lowercase,
+   words joined by dashes, like `weld-arm-ultron`; `npm run rover:sdk` converts a name written with spaces or
+   capitals, which FrodoBots would answer with "Bot unavailable for SDK"), and leave
    `MISSION_SLUG` out (missions are for FrodoBots' shared rovers). `CONTROL_WATCHDOG_S=1` is already set
    there: the SDK stops the rover a second after drive commands stop reaching it. Keep it at 1 or less.
 2. **The app.** It is a second Bubblewrap app in `quest-app/rover/`, signed with the game's key, that loads
@@ -208,16 +213,19 @@ loads the published copy of it, which reaches this PC through the same USB link.
    npm run apk -- --app rover
    ```
 
-3. **Let the app reach this PC.** The app is a website calling the headset's own address (the USB link),
-   which Quest Browser lets a site do only after you allow it once. With the headset connected:
+3. **Letting the app reach this PC is automatic.** The app is a website calling the headset's own address
+   (the USB link), which Quest Browser allows only after a permission prompt ("loopback-network") that an
+   immersive app cannot show. `npm run rover` grants it over USB debugging each time it starts the app, as a
+   DevTools permission override that lasts while `npm run rover` runs (`scripts/devtools.mjs`). If it never
+   says "The Rover Cockpit app may reach this PC", allow it once by hand instead:
 
    ```bash
    npm run rover -- --allow
    ```
 
    This opens the published cockpit in Quest Browser; put the headset on and allow it when asked (it may be
-   called "Apps on device"). The app shares that permission. If you said no, change it in Quest Browser's
-   site settings for `seyedalicheraghi.github.io`.
+   called "Apps on device"). If you said no, change it in Quest Browser's site settings for
+   `seyedalicheraghi.github.io`.
 
 ### Drive
 
@@ -233,9 +241,14 @@ loads the published copy of it, which reaches this PC through the same USB link.
    npm run rover
    ```
 
-   This serves the cockpit, links the headset to this PC (`adb reverse tcp:8080`) and starts the app. Without
-   the app it opens the cockpit in Quest Browser instead, with one Start button. After that you can also
-   start the app from the headset's library, for as long as the cable stays in.
+   This serves the cockpit, links the headset to this PC (`adb reverse tcp:8080`), starts the app and keeps it
+   allowed to reach this PC: leave this window open while you drive. It also restores the link after you
+   replug the cable or restart the headset. While it runs you can also start the app from the headset's
+   library. Without the app it opens the cockpit in Quest Browser instead, with one Start button; run it again
+   after replugging the cable.
+
+   The rover takes one driver at a time: driving it from FrodoBots' website or app takes it away from the SDK
+   (the cockpit loses video). Close that, then restart `npm run rover:sdk`.
 
 The first time, check the steering with the rover's wheels off the ground or at the 30 % limit: FrodoBots'
 own documents disagree on which way it turns. If it turns the wrong way, click both sticks together.

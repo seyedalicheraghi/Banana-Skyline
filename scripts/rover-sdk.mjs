@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { dotenvValue, slugForm } from './sdk-env.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DIR = path.resolve(process.env.ROVER_SDK_DIR || path.join(HERE, '..', '..', 'earth-rovers-sdk'));
@@ -27,6 +28,16 @@ if (set('MISSION_SLUG')) {
     'The Rover Cockpit drives your own rover without missions: delete that line (or put # in front of it).']);
 }
 
+// FrodoBots finds the rover by its slug (lowercase, words joined by dashes, like weld-arm-ultron); its display
+// name with spaces or capitals gets 404 "Bot unavailable for SDK". Pass the slug form instead: the SDK keeps an
+// environment value over its .env (load_dotenv without override), so the file stays as written.
+const childEnv = { ...process.env };
+const slug = slugForm(dotenvValue(env, 'BOT_SLUG'));
+if (!process.env.BOT_SLUG && slug) {
+  childEnv.BOT_SLUG = slug;
+  console.log(`BOT_SLUG in ${envFile} has spaces or capitals; using its slug form "${slug}".`);
+}
+
 console.log(`Earth Rovers SDK: http://localhost:8000/ (${DIR}). Leave this window open while you drive.`);
-const child = spawn(python, ['-m', 'hypercorn', 'main:app', '--bind', '127.0.0.1:8000'], { cwd: DIR, stdio: 'inherit' });
+const child = spawn(python, ['-m', 'hypercorn', 'main:app', '--bind', '127.0.0.1:8000'], { cwd: DIR, stdio: 'inherit', env: childEnv });
 child.on('exit', code => process.exit(code ?? 1));
